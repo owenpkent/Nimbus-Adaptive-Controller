@@ -189,7 +189,7 @@ Layouts are persisted on every meaningful state change — widget move, widget r
 
 ## 6. Output Backends
 
-Nimbus supports two virtual controller drivers. The choice is per-profile and is auto-selected based on layout type, with vJoy preferred for layouts requiring more than 14 buttons or more than 4 axes, and ViGEm preferred elsewhere because XInput is the dominant modern game-controller protocol on Windows.
+Nimbus supports two virtual controller drivers. The choice is per-profile and is auto-selected from the profile's declared `layout_type`. Profiles of type `xbox`, `adaptive`, or `custom` route through ViGEm — these are layouts a user is most likely to point at modern XInput-only titles — while `flight_sim` profiles route through vJoy, since flight and ground-control software depends on the larger DirectInput axis and button budget. The user can override the auto-selection at any time from the status ribbon, and `controller.prefer_vigem` in the config is consulted as a tiebreaker; vJoy is also used as a fallback when the `vgamepad` package or the ViGEmBus driver is absent.
 
 ### 6.1 vJoy (DirectInput)
 
@@ -209,13 +209,13 @@ The bridge owns a single controller-interface object whose concrete type is `VJo
 
 ## 7. Profile System
 
-Profiles are versioned, JSON-serialised configurations stored in:
+Profiles are versioned, JSON-serialised configurations stored under the platform's standard user-data directory:
 
 | Platform | Path |
 |----------|------|
-| Windows | `%APPDATA%\ProjectNimbus\profiles\` |
-| macOS   | `~/Library/Application Support/ProjectNimbus/profiles/` |
-| Linux   | `~/.local/share/ProjectNimbus/profiles/` |
+| Windows  | `%APPDATA%\ProjectNimbus\profiles\` |
+| macOS    | `~/Library/Application Support/ProjectNimbus/profiles/` *(path resolver only; macOS is not a supported runtime — see § 2.2)* |
+| Linux    | `~/.local/share/ProjectNimbus/profiles/` *(path resolver only; Linux is not a supported runtime — see § 2.2)* |
 
 A profile carries every piece of information needed to reproduce the user's controller end-to-end: layout type, custom layout (if applicable), per-axis sensitivity and deadzone, button toggle states, axis mapping, and metadata (display name, description). On first run, the bundled `adaptive_platform_2.json` is copied into the user data directory; thereafter the user may duplicate, rename, modify, and delete profiles freely. There is no central server, no account requirement, and no upload; profile sharing is a matter of copying a JSON file.
 
@@ -230,7 +230,7 @@ A latent obstacle to a mouse-driven controller is that many games re-confine the
 Nimbus solves this with a built-in borderless-gaming layer (`src/borderless.py`):
 
 - **Window flattening.** `make_borderless()` strips `WS_CAPTION` and `WS_THICKFRAME` from the target window's style and resizes it to fill the monitor. The game now occupies the screen but does not own it; the Windows compositor still arbitrates focus and z-order.
-- **Cursor liberation.** A background thread polls `ClipCursor(NULL)` at a configurable interval (16 ms aggressive, 200 ms gentle) to undo any clipping the game applies. This is cooperative — the thread cannot prevent the game from re-clipping in the next frame, only undo it on the next polling cycle — but in practice the latency is below the perceptual threshold for cursor jump.
+- **Cursor liberation.** A dedicated, priority-elevated thread releases `ClipCursor(NULL)` on a tight loop. The default interval is 2 ms, chosen explicitly to outrace a 60 fps game's per-frame re-clip (~16 ms); a gentler 50–100 ms mode is exposed for titles that re-clip less aggressively or for which CPU cost matters more than latency. The thread also performs `AttachThreadInput` to the game's input thread so the release applies to the same input state the game is mutating, and force-expands the clip rectangle to the full virtual screen if the game has somehow won the race. This is still cooperative — the thread cannot prevent the next frame's re-clip, only undo it — but in practice cursor escape is below the perceptual threshold for jump.
 - **Auto-detection.** A built-in compatibility table covering 30+ games is consulted on launch to suggest known-working configurations.
 
 The trade-off is that this technique is detectable and could be misclassified by anti-cheat systems. Nimbus does not modify game memory, hook game APIs, or interfere with input on the game's side; it operates entirely on the Windows window/cursor layer, the same layer used by routine accessibility tools. To date no anti-cheat false positives have been reported, but the design choice to operate at the OS layer rather than at the game layer is deliberate and should be preserved.
@@ -239,13 +239,11 @@ The trade-off is that this technique is detectable and could be misclassified by
 
 ## 9. Game Focus Mode
 
-A second focus-related obstacle: certain games pause or stop accepting input the moment they lose foreground status. A user clicking on the Nimbus window to operate a button thereby pauses their own game. *Game Focus Mode* circumvents this:
+A second focus-related obstacle: certain games pause or stop accepting input the moment they lose foreground status. A user clicking on the Nimbus window to operate a button thereby pauses their own game. *Game Focus Mode* circumvents this without ever transferring focus.
 
-1. On every Nimbus mouse press, the foreground window handle is captured.
-2. Nimbus briefly takes focus to register the input.
-3. On mouse release, focus is restored to the captured window via `SetForegroundWindow()`, with `AttachThreadInput()` used to bypass Windows' anti-focus-stealing protection.
+The Nimbus window's extended style is augmented with `WS_EX_NOACTIVATE`, and `WM_MOUSEACTIVATE` is intercepted to return `MA_NOACTIVATE`. The combined effect is that the window remains fully interactive — clicks, drags, and hover events reach Nimbus widgets normally — but Windows never elevates the window to foreground status. Focus stays with the game across the entire session; the game has no event to react to, because no focus transition occurs.
 
-The user experiences a single uninterrupted game session; the game experiences a sub-100-ms focus blip per click, which most titles tolerate without pausing.
+This design supersedes an earlier (v1.4.0) save-and-restore-foreground approach, which was correct in principle but produced a sub-100-ms focus blip on every click. The blip was sufficient to trigger pause menus in titles such as Minecraft. The current `WS_EX_NOACTIVATE` design eliminates the blip entirely. Implementation is in `src/window_utils.py`.
 
 ---
 
@@ -267,14 +265,14 @@ Nimbus also interoperates today with Windows Eye Control. Eye Control treats the
 
 ---
 
-## 11. Optional Account, Sync, and Telemetry Layer
+## 11. Optional Cloud Layer
 
-An optional cloud layer is in development (per `CHANGELOG.md`'s Unreleased section):
+An optional cloud layer ships with Nimbus and is fully off by default:
 
-- **Account system** via Supabase, with email + Google + Facebook OAuth. Tokens are stored in the OS credential vault (`keyring` → Windows Credential Manager). Sessions restore silently and refresh in the background; offline operation is preserved.
-- **Profile sync** for subscribers, using last-write-wins per profile ID. Push on save, pull on startup.
-- **Opt-in, anonymous telemetry** with SHA-256-hashed identifiers, batched and flushed every 5 minutes. No PII is collected. Crash reports are routed via Sentry.
-- **Auto-updater** consuming a static JSON manifest with stable / beta / dev channels and a minimum-supported-version field for force-update warnings.
+- **Account system** (`src/cloud_client.py`) via Supabase, with email + Google + Facebook OAuth. Tokens are stored in the OS credential vault (`keyring` → Windows Credential Manager); no plaintext tokens are written to disk. Sessions restore silently on launch and refresh in the background, and offline operation is preserved if any of those steps fail.
+- **Profile sync** for Nimbus+ subscribers, using last-write-wins per profile ID. Push on save, pull on startup. Conflicts use the most recent timestamp.
+- **Opt-in, anonymous telemetry** (`src/telemetry.py`) with SHA-256-hashed identifiers, buffered locally and batch-flushed every 5 minutes. No PII is collected, and the on-disk fallback is bounded to prevent unbounded growth. Crash reports are routed via Sentry when enabled.
+- **Auto-updater** (`src/updater.py`) consuming a static JSON manifest with stable / beta / dev channels and a minimum-supported-version field for force-update warnings. No background downloads, no silent installs — the user clicks through to the release page.
 
 Three principles govern this layer:
 
@@ -306,7 +304,7 @@ The platform is positioned to extend in four directions, each preserving the sam
 
 Nimbus is distributed in three forms:
 
-- **Source.** `python run.py` bootstraps a virtual environment, installs dependencies (PySide6, pyvjoy, vgamepad, numpy, pywin32, keyring, httpx, sentry-sdk), and launches the QML app.
+- **Source.** `python run.py` bootstraps a virtual environment, installs dependencies (PySide6, pyvjoy, vgamepad, numpy, keyring, httpx, sentry-sdk), and launches the QML app. All Win32 integration uses the standard-library `ctypes` module — there is no `pywin32` dependency, by design.
 - **Portable executable.** A single-file PyInstaller build with all assets and dependencies bundled.
 - **Installer.** An NSIS installer that detects existing vJoy and ViGEmBus installations (via 64-bit registry views), creates Start Menu shortcuts, and launches the application post-install at the user's privilege level rather than the installer's elevated level.
 
@@ -316,7 +314,7 @@ The codebase follows PEP 8 with type annotations throughout. Tests live in `test
 
 ## 14. Conclusions
 
-Nimbus Adaptive Controller is, at its core, a thirty-line argument: *given a user who can move a cursor, and given a kernel-level virtual controller driver, a sufficiently expressive layout engine in user space is a complete adaptive controller.* The hardware industry has converged on a parallel argument that requires hundreds of pounds of physical hubs and switches; Nimbus shows that the software path produces a comparable result at zero marginal cost, and that the *layout* — not the device — is the appropriate locus of customisation.
+Nimbus Adaptive Controller is, at its core, a one-paragraph argument: *given a user who can move a cursor, and given a kernel-level virtual controller driver, a sufficiently expressive layout engine in user space is a complete adaptive controller.* The hardware industry has converged on a parallel argument that requires hundreds of pounds of physical hubs and switches; Nimbus shows that the software path produces a comparable result at zero marginal cost, and that the *layout* — not the device — is the appropriate locus of customisation.
 
 The technical contributions are modest individually and load-bearing collectively: a single dual-mode widget component, a JSON-defined canvas, a uniform input pipeline with deadzones / curves / smoothing / failsafe, a backend-agnostic driver abstraction, a pop-out palette window, a triple-click lock, a cooperative cursor-liberation thread, and a focus-restoration shim. None of these is novel in isolation. Their composition is what produces an accessibility surface that a user can *self-administer* — without sighted assistance, without expert configuration, and without proprietary hardware.
 
@@ -330,7 +328,7 @@ The roadmap directions — voice, AI-assisted execution, AAC, hardware bridging,
 |----------|--------------------|----------------------------|
 | Analog axes | 8 (X, Y, Z, RX, RY, RZ, SL0, SL1) | 4 + 2 triggers |
 | Joysticks | Up to 4 | 2 |
-| Buttons | Up to 128 | 14 |
+| Buttons | Up to 128 | 10 face/shoulder/stick buttons + 4-way D-pad (commonly counted as 14) |
 | POV hats | Yes | D-pad (4 directions) |
 | Game compatibility | Older / simulator / pro flight & ground-control | Modern PC games / Steam |
 
