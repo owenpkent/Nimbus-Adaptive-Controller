@@ -1,3 +1,25 @@
+"""
+Custom QtWidgets controls used by the legacy widget shell.
+
+Provides two interactive widgets:
+
+* :class:`JoystickWidget` — a circular two-axis joystick that emits
+  normalized ``(x, y)`` in ``[-1, 1]``.
+* :class:`SliderWidget` — a one-axis slider/throttle that emits a
+  normalized value in ``[-1, 1]``.
+
+Both widgets:
+
+* Read sizing / DPI scale from :class:`~src.config.ControllerConfig`.
+* Use *relative* drag tracking (the handle does not jump to the click
+  point) so a partial-range physical input maps 1:1 to the on-screen
+  control.
+* Animate a gentle exponential return-to-center on mouse release rather
+  than snapping, so the downstream vJoy/ViGEm signal does not pop.
+
+The QML front end uses its own controls; these widgets are only consumed
+by :mod:`src.qt_main`.
+"""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal, QPointF, QRectF, QSize, QTimer
@@ -8,6 +30,22 @@ from .config import ControllerConfig
 
 
 class JoystickWidget(QWidget):
+    """Circular two-axis joystick with normalized output.
+
+    Emits :attr:`valueChanged` with ``(x, y)`` in ``[-1, 1]`` whenever the
+    handle position changes. Up is positive Y. The handle is clamped to the
+    unit circle — diagonal pulls cannot exceed magnitude 1.
+
+    Args:
+        config: Application configuration (used for scaled sizing).
+        which: Logical identifier — ``"left"`` or ``"right"``. Used by
+            callers to disambiguate when wiring multiple instances.
+        parent: Optional Qt parent.
+
+    Signals:
+        valueChanged(float, float): Emitted with normalized ``(x, y)``.
+    """
+
     valueChanged = Signal(float, float)  # x, y in [-1, 1]
 
     def __init__(self, config: ControllerConfig, which: str = "left", parent: QWidget | None = None) -> None:
@@ -198,6 +236,24 @@ class JoystickWidget(QWidget):
 
 
 class SliderWidget(QWidget):
+    """One-axis slider/throttle widget with normalized output.
+
+    Emits :attr:`valueChanged` with a single float in ``[-1, 1]`` whenever
+    the handle position changes. Vertical sliders treat *up* as positive.
+
+    Args:
+        config: Application configuration (used for scaled sizing).
+        orientation: ``Qt.Horizontal`` or ``Qt.Vertical``.
+        label: Optional display label (used by callers for layout titles).
+        auto_center: If True, the handle returns to zero on release.
+        parent: Optional Qt parent.
+        gentle_return: If True, return-to-center is animated via exponential
+            decay rather than snapping.
+
+    Signals:
+        valueChanged(float): Emitted with the new normalized value.
+    """
+
     valueChanged = Signal(float)  # value in [-1, 1]
 
     def __init__(self, config: ControllerConfig, orientation: Qt.Orientation, label: str = "", auto_center: bool = True, parent: QWidget | None = None, gentle_return: bool = True) -> None:

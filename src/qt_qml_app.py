@@ -1,3 +1,21 @@
+"""
+Application entry point for Nimbus Adaptive Controller (QML front end).
+
+Bootstraps the :class:`QApplication`, displays a splash screen while the
+heavyweight subsystems initialize (vJoy/ViGEm probing, telemetry, cloud
+client, update checker), then loads ``qml/Main.qml`` via
+:class:`QQmlApplicationEngine`.
+
+Context properties exposed to QML
+---------------------------------
+* ``controller`` — :class:`~src.bridge.ControllerBridge`
+* ``config`` — :class:`~src.config.ControllerConfig`
+* ``telemetry`` — :class:`~src.telemetry.TelemetryClient`
+* ``cloud`` — :class:`~src.cloud_client.CloudClient`
+* ``updater`` — :class:`~src.updater.UpdateChecker`
+
+Run with ``python -m src.qt_qml_app`` or via ``run.py`` / ``run.bat``.
+"""
 from __future__ import annotations
 
 import os
@@ -18,14 +36,22 @@ from . import __version__
 
 
 def qml_path() -> Path:
-    # Resolve qml directory relative to this file (project-root/qml)
+    """Return the absolute path to the root QML file (``qml/Main.qml``)."""
     here = Path(__file__).resolve().parent
     project_root = here.parent
     return project_root / "qml" / "Main.qml"
 
 
 def _create_splash(project_root: Path) -> QSplashScreen | None:
-    """Create a dark splash screen with the logo and loading text."""
+    """Build and show a dark splash screen with the logo, version, and tagline.
+
+    Args:
+        project_root: Repository root used to locate ``logo.png``.
+
+    Returns:
+        The shown :class:`QSplashScreen`, or ``None`` if the logo file is
+        missing or unreadable (the app still starts; just no splash).
+    """
     logo_path = project_root / "logo.png"
     if not logo_path.exists():
         return None
@@ -75,6 +101,12 @@ def _create_splash(project_root: Path) -> QSplashScreen | None:
 
 
 def main() -> int:
+    """Application entry point: build subsystems, load QML, run the event loop.
+
+    Returns:
+        The Qt event loop exit code (``0`` on clean shutdown, non-zero on
+        QML load failure).
+    """
     app = QApplication(sys.argv)
     app.setApplicationName("Nimbus Adaptive Controller")
 

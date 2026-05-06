@@ -1,3 +1,40 @@
+"""
+QML <-> Python bridge for Nimbus Adaptive Controller.
+
+This module exposes :class:`ControllerBridge`, the single ``QObject`` that
+backs the QML user interface. The bridge fans QML interactions out to the
+underlying subsystems:
+
+* :class:`~src.vjoy_interface.VJoyInterface` — DirectInput virtual joystick
+* :class:`~src.vigem_interface.ViGEmInterface` — XInput Xbox 360 emulation
+* :mod:`~src.borderless` — borderless windowed mode + ClipCursor release
+* :mod:`~src.mouse_hider` — controller-mode keep-alive (game voluntarily
+  releases the mouse)
+* :mod:`~src.window_utils` — ``WS_EX_NOACTIVATE`` "Game Focus" mode
+* :class:`~src.config.ControllerConfig` — persistent settings + profiles
+
+Bridge responsibilities
+-----------------------
+* Translate QML method calls (``Slot``\\ s) into back-end operations.
+* Apply per-axis sensitivity curves and optional smoothing before forwarding
+  values to the active controller interface.
+* Persist UI state (scale factor, debug borders, recent profiles, etc.) via
+  :class:`ControllerConfig`.
+* Emit Qt signals (``profileChanged``, ``vjoyConnectionChanged`` ...) so QML
+  can react to back-end state changes.
+
+Threading model
+---------------
+The bridge runs on the Qt main thread. A single :class:`QTimer`
+(``_smooth_timer``) ticks at the configured vJoy update rate and applies
+exponential smoothing to axes that are routed through vJoy. ViGEm bypasses
+the smoothing tick and is updated directly because it has its own internal
+update loop. Cursor-release polling and controller-mode keep-alive run on
+dedicated worker threads owned by their respective modules.
+
+The bridge is wired into QML in :mod:`src.qt_qml_app` as the context
+property ``controller``.
+"""
 from __future__ import annotations
 
 import sys
@@ -49,9 +86,42 @@ except Exception:
 
 
 class ControllerBridge(QObject):
-    """
-    QObject bridge that connects QML UI to Python back end (VJoy + Config).
-    Exposed to QML as context property "controller" in qt_qml_app.py
+    """QObject bridge between the QML UI and the Python back end.
+
+    Exposed to QML as the context property ``controller`` (see
+    :func:`src.qt_qml_app.main`). All ``@Slot``-decorated methods are callable
+    from QML; all signals declared on the class are observable from QML.
+
+    The bridge owns the active controller interface — either a
+    :class:`~src.vjoy_interface.VJoyInterface` (DirectInput) or a
+    :class:`~src.vigem_interface.ViGEmInterface` (XInput / Xbox 360
+    emulation), selected based on the current profile's ``layout_type`` and
+    the ``controller.prefer_vigem`` config flag. ViGEm is preferred for
+    ``xbox`` / ``adaptive`` / ``custom`` profiles because it works with
+    XInput-only games (e.g. *No Man's Sky*).
+
+    Args:
+        config: Application configuration object.
+        parent: Optional Qt parent for ownership.
+
+    Signals:
+        scaleFactorChanged(float): UI scale factor changed.
+        vjoyConnectionChanged(bool): Active controller connect/disconnect.
+        debugBordersChanged(bool): Debug border overlay toggled.
+        buttonsVersionChanged(int): Bumped when button modes change so QML
+            re-evaluates its bindings.
+        profileChanged(str): Active profile ID changed.
+        layoutTypeChanged(str): Active profile's layout type changed.
+        profilesListChanged(): Profile inventory changed (add/delete).
+        profileSaved(bool): Save attempt completed (True == success).
+        noFocusModeChanged(bool): Game Focus mode toggled.
+        cursorReleaseChanged(bool): ClipCursor release polling toggled.
+        borderlessModeChanged(int, bool): Game window borderless state
+            changed; ``(hwnd, is_borderless)``.
+        controllerModeChanged(bool): Controller-mode enforcement toggled.
+        outputModeChanged(str): Output device switched (``'vjoy'`` or
+            ``'vigem'``).
+        recentProfilesChanged(): Recent-profiles list updated.
     """
 
     scaleFactorChanged = Signal(float)
@@ -70,6 +140,17 @@ class ControllerBridge(QObject):
     recentProfilesChanged = Signal()  # Emits when the recently-used profile list changes
 
     def __init__(self, config: ControllerConfig, parent: Optional[QObject] = None) -> None:
+        """Initialize the bridge and probe for available controller back ends.
+
+        Selects ViGEm or vJoy based on the current profile's layout type and
+        the ``controller.prefer_vigem`` config flag, starts the smoothing
+        timer at the configured vJoy update rate, and emits the initial
+        ``vjoyConnectionChanged`` signal.
+
+        Args:
+            config: Application configuration object.
+            parent: Optional Qt parent for ownership.
+        """
         super().__init__(parent)
         self._config = config
         self._window: Optional[QWindow] = None

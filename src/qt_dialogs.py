@@ -1,3 +1,31 @@
+"""
+Settings dialogs for Nimbus Adaptive Controller.
+
+Hosts the Qt dialogs reachable from the menu bar / QML and shared between
+the legacy widget shell and the QML front end:
+
+* :class:`AxisSettingsQt` — unified per-axis sensitivity/deadzone editor
+  with a live curve preview.
+* :class:`JoystickSettingsQt` — sensitivity / deadzone / extremity-deadzone
+  for both joysticks with a live curve preview.
+* :class:`SliderSettingsQt` — same shape as JoystickSettingsQt but for
+  trigger/slider axes; title adapts to the active profile.
+* :class:`AxisMappingQt` — map UI joystick axes to vJoy axes.
+* :class:`ButtonSettingsQt` — view / edit the button-to-vJoy mapping and
+  per-button toggle mode.
+
+Internal helpers:
+
+* ``_LabeledSlider`` — :class:`QSlider` with a live ``"<title>: NN%"``
+  caption.
+* ``_CurvePreview`` — paints the input -> output curve so users can see
+  the effect of their settings before applying.
+
+All dialogs read and write :class:`~src.config.ControllerConfig`. Curve
+math in the previews is kept in lock-step with
+:func:`~src.config.ControllerConfig.apply_joystick_dialog_curve` so the
+preview matches runtime feel exactly.
+"""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
@@ -28,6 +56,12 @@ from .config import ControllerConfig
 
 
 class _LabeledSlider(QWidget):
+    """Horizontal :class:`QSlider` paired with a live ``"<title>: NN%"`` label.
+
+    Displays values as integer percentages. Used by the settings dialogs to
+    keep a consistent look-and-feel; not part of the public API.
+    """
+
     def __init__(self, title: str, min_val: int, max_val: int, value: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._label = QLabel(f"{title}: {value}%", self)
@@ -674,6 +708,14 @@ class AxisSettingsQt(QDialog):
 
 
 class JoystickSettingsQt(QDialog):
+    """Joystick sensitivity / deadzone / extremity-deadzone editor.
+
+    Provides three percent sliders backed by ``joystick_settings.*`` config
+    keys and a live :class:`_CurvePreview` so the user can see how the
+    response curve changes before clicking Apply. Persists on Apply via
+    :meth:`ControllerConfig.save_config`.
+    """
+
     def __init__(self, config: ControllerConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Joystick Settings")

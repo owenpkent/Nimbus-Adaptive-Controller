@@ -1,3 +1,17 @@
+"""
+Legacy QtWidgets main window for Nimbus Adaptive Controller.
+
+This module hosts the original :class:`QMainWindow`-based UI assembled from
+:class:`~src.qt_widgets.JoystickWidget` and
+:class:`~src.qt_widgets.SliderWidget`. It is retained as a fallback shell
+and for development; the primary user-facing UI is the QML application
+launched from :mod:`src.qt_qml_app`.
+
+The window wires its widgets directly to a :class:`VJoyInterface` and
+exposes settings dialogs via the menu bar. It does not use the
+:class:`~src.bridge.ControllerBridge`; the bridge is only used by the QML
+front end.
+"""
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -24,6 +38,14 @@ from .qt_dialogs import JoystickSettingsQt, ButtonSettingsQt, SliderSettingsQt, 
 
 
 class MainWindow(QMainWindow):
+    """Legacy QtWidgets main window assembling joystick / slider widgets.
+
+    Loads :class:`ControllerConfig`, instantiates a :class:`VJoyInterface`
+    directly, and wires widget value-changed signals to vJoy axis updates.
+    Provides a menu bar with access to per-axis sensitivity, button, slider,
+    and axis-mapping dialogs.
+    """
+
     def __init__(self) -> None:
         super().__init__()
 

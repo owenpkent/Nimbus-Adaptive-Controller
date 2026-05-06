@@ -10,6 +10,9 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Documentation
+- **Industry-standard docstrings** — Added Google-style module and class docstrings to `src/bridge.py`, `src/qt_main.py`, `src/qt_qml_app.py`, `src/qt_widgets.py`, and `src/qt_dialogs.py`. The bridge now documents its full signal inventory and threading model; Qt widget classes document their normalized output ranges and signal contracts; the QML entry point lists all context properties exposed to QML. The remaining ten modules in `src/` already carried full Google/NumPy-style docstrings and were left unchanged.
+
 ### Added
 - **User Accounts** (`src/cloud_client.py`) — Optional sign-in with Email, Google OAuth, or Facebook OAuth via Supabase. Tokens stored securely in OS credential vault (Windows Credential Manager) via `keyring`. Supports session restore, silent token refresh, and offline fallback.
 - **Cloud Profile Sync** — Nimbus+ subscribers can sync profiles across machines. Last-write-wins merge strategy per profile ID. Push on save, pull on startup.
