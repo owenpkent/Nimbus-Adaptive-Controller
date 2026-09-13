@@ -260,13 +260,13 @@ Screen-capture target detection driving the stick is an aimbot regardless of int
 
 As of 2026 both Activision and Respawn have stated publicly that genuine accessibility hardware is exempt and encouraged, and that XIM and Cronus are not accessibility tools despite being marketed as such. Respawn classified XIM adapters as cheating devices in March 2026 with permanent bans and no appeals; Activision's Ricochet update for Black Ops 7 Season 2 describes detection built to recognize *classes of machine-driven behavior* rather than specific device signatures. `HOST_MODE_ISOLATION.md` section 8 already reaches the same conclusion from the driver side: at the device layer Nimbus is not distinguishable from a XIM, so the distinction has to be behavioral.
 
-The property that keeps Nimbus on the right side of that line is simple and worth stating explicitly in the README as a non-goal:
+The property that keeps Nimbus on the right side of that line was stated in the README as a non-goal from the start, and its multiplayer half is unchanged: **screen-capture target detection driving the stick is an aimbot regardless of intent in any game where another person is on the other end, and Nimbus will not build one.** Everything in sections 4 through 6 satisfies that, and nothing in this document reads the screen.
 
-> **Nimbus reshapes input the user produces. It never originates aim.**
+On 2026-09-13 the owner narrowed the other half, on the research in [TARGET_AWARE_AIM_PLAN.md](TARGET_AWARE_AIM_PLAN.md) and its dossier. The line now reads:
 
-Everything in sections 4 through 6 satisfies that. Nothing in this document proposes reading the screen, detecting targets, or generating input the user did not command.
+> **Nimbus reshapes input the user produces. In single-player games it can also help the user land on what they are already aiming at: it will slow or steer a stick the user is moving, or turn to a target once when the user asks. It never plays for the user, never fires, never hides what it is doing, and refuses to run target-aware assistance in any game with anti-cheat or competitive play.**
 
-A proposal to narrow this line for single-player games only, with the research behind it and the rules it would keep, is [TARGET_AWARE_AIM_PLAN.md](TARGET_AWARE_AIM_PLAN.md) (2026-09-13). It is not adopted; nothing here changes until its section 2 is decided.
+What that means in code is the plan's section 5, and its first piece is built: `src/spectator/policy.py` decides, for the foreground game, whether target-aware assistance may run at all. A positive allowlist by title (`src/spectator/games/*.json`, two shipped single-player entries and two harness-only ones), a refusal whenever an anti-cheat service is running, a refusal for any title with a competitive mode until a per-title decision is recorded in its entry, and a refusal with the reason on screen for anything unknown. It is a posture rather than an enforcement mechanism (a JSON file and a process list), and it is checked by `tests/test_assist_policy.py`. The assistance itself follows in the plan's phases 1 and 2; until they land, nothing target-aware runs.
 
 ---
 

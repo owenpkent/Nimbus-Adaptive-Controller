@@ -46,6 +46,8 @@ This is an owner decision, not an engineering one, for three reasons:
 
 If the decision is no, phases 1 and 2 still have value with the perception removed: the servo and the closed-loop primitive are what Spectator+ needs for "turn to face the door" from voice, and the per-game screen calibration is useful on its own. Section 10 says what survives.
 
+**Decision, 2026-09-13: yes.** The owner chose the narrower position and phases 0 to 2, taking the recommendations in section 12 as the defaults: unknown titles are refused outright; the first shipped entries are Half-Life 2 and PowerWash Simulator, with Left 4 Dead 2 and Arma 3 as harness-only test entries; the feature is called "Target assist" in the UI; the Python floor is decided at phase 2 when a capture library is chosen; the track-while-held tier is built only if the hands-on sessions ask for it. Phase 0 landed the same day (section 10): the README and section 10 of the aim document carry the new wording, `src/spectator/policy.py` and `src/spectator/games/` are the allowlist and the rule, and `tests/test_assist_policy.py` checks them in the fast suite.
+
 ---
 
 ## 3. What already exists
@@ -300,7 +302,7 @@ Hands on, with the dev machine's profile and with a caregiver at the console: st
 
 ## 10. Order of work
 
-1. **Phase 0, policy and words (half a day).** Decide section 2. Write `policy.py` and the allowlist format with the Arma 3 harness entry marked test-only; `tests/test_assist_policy.py`; revise the README line and `AIM_ASSISTANCE.md` section 10 to the narrower position; add the "what this does not do" list to the README. Nothing target-aware runs yet.
+1. **Phase 0, policy and words (half a day).** Decide section 2. Write `policy.py` and the allowlist format with the Arma 3 harness entry marked test-only; `tests/test_assist_policy.py`; revise the README line and `AIM_ASSISTANCE.md` section 10 to the narrower position; add the "what this does not do" list to the README. Nothing target-aware runs yet. *Done 2026-09-13.* The rule is `AssistPolicy.check(window_title, process_image, running_processes)`, pure and tested with fake lists, and `check_foreground()` reads the live session on Windows. Anti-cheat presence is decided by process image (Easy Anti-Cheat, BattlEye, Vanguard, FACEIT) before the allowlist is consulted. The four entries carry who decided them and why.
 2. **Phase 1, the closed loop (two to three days).** `servo.py` and its tests; `ScriptTargetSource` over the Arma 3 clipboard channel with the mission extended to publish a target; `look_at` in the runner; `get_spectator` as a slot; the T1 px/deg check and T2 to T8 in the harness; the calibration JSON added to the PyInstaller spec. Exit: T2 and T3 pass on `arma3_nobe`, and `arma3` with BattlEye running behaves identically, which is the same control the pad client used.
 3. **Phase 2, assist on the user's stick (three to four days).** `capture.py` with `MssGrabber` first and `WgcGrabber` behind a flag; `ColorTargetSource`; `AssistStage` with A1 and A2 in `_drive_stick`; the schema and QML from section 8; the badge; `probe_assist_windows.py`; the L4D2 layer 4 run; the layer 5 session. Exit: the no-input-no-output property holds in the app (not just the unit test), the L4D2 margin bands, and at least one hands-on session recorded.
 4. **Phase 3, a trained detector as an extra (open-ended; do not start before phase 2 has users).** Settle licensing (section 11); collect the Arma 3 auto-labelled set; train a permissively licensed nano model; `OnnxTargetSource` behind `onnxruntime-directml` with CPU fallback, installed from a `requirements-assist.txt` rather than the main file; measure on the RX 6600 XT and on CPU; decide whether it ships in the installer or as a download.
@@ -328,12 +330,14 @@ Phases 1 and 2 can start on this branch. Phase 0's document changes should land 
 
 ## 12. Open questions to settle before phase 1
 
-1. **Section 2.** Yes, no, or yes for phases 1 and 2 only. This gates the document changes, not the servo.
-2. **Allowlist strictness.** Refuse unknown titles outright (recommended), or warn and allow with the assist limited to A1. Refusing is the position that can be defended in a sentence.
-3. **Shipped titles.** Which single-player games go on the first list, and whether Left 4 Dead 2 (Versus mode, VAC) is a test title only. Recommended: test only. Candidates for the first shipped entries are titles the harness can already run that have no competitive mode: Half-Life 2 and PowerWash Simulator, the second being a non-violent aim task (a nozzle onto dirt) that is a good demonstration for exactly the audience this is for.
-4. **Naming.** "Target assist" in the UI, under the Spectator+ heading. Not "aim bot", not "auto aim".
-5. **The Python floor**, as above.
-6. **Whether A4 ships at all.** It is the tier that reads as playing for the user. Recommended: build it in phase 4 only if phase 2's hands-on sessions ask for it.
+Settled 2026-09-13 with the section 2 decision; each answer is the recommendation that was written here.
+
+1. **Section 2.** Yes, for phases 0 to 2. *Decided: yes.*
+2. **Allowlist strictness.** Refuse unknown titles outright (recommended), or warn and allow with the assist limited to A1. Refusing is the position that can be defended in a sentence. *Decided: refuse; `policy.py` does.*
+3. **Shipped titles.** Which single-player games go on the first list, and whether Left 4 Dead 2 (Versus mode, VAC) is a test title only. Recommended: test only. Candidates for the first shipped entries are titles the harness can already run that have no competitive mode: Half-Life 2 and PowerWash Simulator, the second being a non-violent aim task (a nozzle onto dirt) that is a good demonstration for exactly the audience this is for. *Decided: Half-Life 2 and PowerWash Simulator shipped; Left 4 Dead 2 and Arma 3 test-only.*
+4. **Naming.** "Target assist" in the UI, under the Spectator+ heading. Not "aim bot", not "auto aim". *Decided: "Target assist".*
+5. **The Python floor**, as above. *Deferred to phase 2, when a capture library is chosen.*
+6. **Whether A4 ships at all.** It is the tier that reads as playing for the user. Recommended: build it in phase 4 only if phase 2's hands-on sessions ask for it. *Decided: only if asked for.*
 
 ---
 

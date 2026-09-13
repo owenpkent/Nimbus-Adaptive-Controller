@@ -1,0 +1,14 @@
+{
+    "name": "arma3",
+    "title": "Arma 3",
+    "process": "arma3_x64.exe",
+    "modes": ["single", "coop", "competitive"],
+    "anticheat": "BattlEye",
+    "target_source": "script",
+    "target_params": {"channel": "clipboard", "mission": "nimbus_harness.VR"},
+    "calibration": "arma3",
+    "test_only": true,
+    "competitive_decision": {"allow": true, "on": "2026-09-13", "why": "Harness only: the generated single-player VR mission, never a server. The entry exists for phase 1's target oracle and is refused to the app by test_only."},
+    "decided": {"by": "owner", "on": "2026-09-13", "why": "Phase 1's ground truth: the mission publishes a target's head through worldToScreen. BattlEye's service, when running, refuses the policy before the allowlist is consulted; the harness runs the no-BattlEye control."},
+    "notes": "Not a shipped entry and never will be while the title has servers."
+}

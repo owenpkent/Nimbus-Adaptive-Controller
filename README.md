@@ -40,7 +40,15 @@ Users build their own controller layout by dragging, dropping, and resizing widg
 ### Core Functionality
 - **Modular Layout Builder**: Drag-and-drop canvas to place joysticks, buttons, sliders, D-pads, and steering wheels anywhere
 - **Dual Virtual Joysticks**: Independent axis mapping with FPS-style delta tracking and tremor filtering for wheelchair joysticks. Per-stick travel, an output anti-deadzone that lifts the smallest movement past the game's own deadzone, a precision modifier button, and a live test pad for calibrating against a running game (see [Aim Assistance](docs/vision/AIM_ASSISTANCE.md)).
-- **What Nimbus will not do**: it reshapes input the user produces and never originates aim. No screen reading, no target detection, no synthetic stick motion the user did not command. The reasoning is in [Aim Assistance, section 10](docs/vision/AIM_ASSISTANCE.md#10-the-line-we-do-not-cross).
+- **What Nimbus will and will not do about aim**: it reshapes input the user produces. In single-player games it can also help the user land on what they are already aiming at: it will slow or steer a stick the user is moving, or turn to a target once when the user asks. It never plays for the user, never fires, never hides what it is doing, and refuses to run target-aware assistance in any game with anti-cheat or competitive play. In plain terms, target assist:
+  - never moves unless the user is moving or asked, and cannot turn faster than the user could;
+  - refuses to run where another player could be on the other end, and beside any anti-cheat;
+  - aims, it does not shoot: no trigger automation, no recoil compensation, no ballistic prediction;
+  - announces itself: no jitter, no "humanization", no hidden overlay, no stream guard;
+  - does not upload your screen; frames never leave the machine;
+  - hands control back the moment it loses sight of the target, on a profile switch, or on Ctrl+Alt+F12.
+
+  The reasoning is in [Aim Assistance, section 10](docs/vision/AIM_ASSISTANCE.md#10-the-line-we-do-not-cross) and the rules, the allowlist and the build order in the [Target-Aware Aim plan](docs/vision/TARGET_AWARE_AIM_PLAN.md).
 - **Trigger/Slider Controls**: Horizontal and vertical sliders with 3 snap modes (hold, snap-to-zero, spring-to-center)
 - **Button Support**: Up to 128 configurable buttons with toggle/momentary modes, color and shape options
 - **Macro Joystick Mode**: Convert any joystick into a macro pad — map directions to buttons, axes, or turbo actions

@@ -1,0 +1,14 @@
+{
+    "name": "powerwashsimulator",
+    "title": "PowerWash Simulator",
+    "process": "PowerWashSimulator.exe",
+    "modes": ["single", "coop"],
+    "anticheat": null,
+    "target_source": "color",
+    "target_params": {},
+    "calibration": null,
+    "test_only": false,
+    "competitive_decision": null,
+    "decided": {"by": "owner", "on": "2026-09-13", "why": "A non-violent aim task (a nozzle onto dirt) with no anti-cheat and no opponents; the demonstration this feature is for. Co-op is against nobody."},
+    "notes": "The first phase 2 title (plan section 13.1): whether dirt is detectable by colour is the open question, and the recipe in tests/games runs it already."
+}
