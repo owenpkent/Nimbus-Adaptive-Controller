@@ -52,6 +52,21 @@ nimbus
     then the Spectator+ v0 primitives through the bridge's runner, planned
     from the calibration G12 wrote and measured by the game:
 
+    then, with --assist, the closed loop of TARGET_AWARE_AIM_PLAN.md phase 1,
+    which needs a game whose script publishes where a target is (Arma 3):
+
+    T0  gate: the app refuses this title, an anti-cheat refuses it outright,
+        and the harness's own allowlist entry is what permits the run
+    T1  geometry: pixels per degree from the oracle's own sightings and from
+        phase correlation on the frames, and the loop's measured dead time
+    T2  snap: a target 5, 15 and 30 degrees off centre, settled in degrees
+    T3  snap onto a walking target, with the velocity lead and without
+    T4  silence: a target on screen, nothing asked for, nothing sent
+    T5  the user's own stick cancels a snap and is what the driver is left with
+    T6  the target is deleted mid-snap: the command decays to zero
+    T7  the kill switch releases the axes
+    T8  the servo never exceeds the stick ceiling it was given
+
     P0  the bridge's runner loads this game's calibration
     P1  turn right 90 degrees, P2 turn left 45, P3 turn right 10: within
         15 percent or 5 degrees
@@ -63,6 +78,7 @@ Steam able to sign in without a prompt)::
 
     venv\\Scripts\\python tests\\probe_game_harness_windows.py --game left4dead2 --actuator pad
     venv\\Scripts\\python tests\\probe_game_harness_windows.py --game left4dead2 --actuator nimbus
+    venv\\Scripts\\python tests\\probe_game_harness_windows.py --game arma3_nobe --actuator nimbus --assist
 
 Run them one at a time: each session's pad has to be player one, and the
 runner quits the game at the end unless ``--keep-game`` is given. A recipe
@@ -693,6 +709,8 @@ def nimbus_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
     expect_check(env, "N5", "-", rate)
 
     primitive_checks(env, act, args)
+    if args.assist:
+        assist_checks(env, act, args)
 
 
 def primitive_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -> None:
@@ -704,9 +722,10 @@ def primitive_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace
     if not env.oracle.has_pose:
         record("P0 primitives", True, "no console oracle to measure a turn with, skipped")
         return
-    cal_path = os.path.join(CALIBRATIONS_DIR, f"{recipe['name']}.json")
+    game = str(recipe.get("calibration") or recipe["name"])
+    cal_path = os.path.join(CALIBRATIONS_DIR, f"{game}.json")
     runner = on_qt(lambda: act.bridge.get_spectator())
-    loaded = on_qt(lambda: runner.use_game(recipe["name"]))
+    loaded = on_qt(lambda: runner.use_game(game))
     record("P0 the bridge's Spectator+ runner loads this game's calibration", loaded,
            cal_path + ("" if loaded else " is missing: run the pad actuator with --write-calibration first"))
     if not loaded:
@@ -765,6 +784,393 @@ def primitive_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace
     record("P5 stop: a walk cut short releases the stick and the player stops", ok,
            f"moved {before:.1f} units before the stop, {after:.1f} in the next second; sent LY={sent.get('left_y')}")
 
+# ---- assist: the closed loop (TARGET_AWARE_AIM_PLAN.md phase 1) ------------------
+def assist_servo(env: GameEnv, act: NimbusActuator, dead_time: float, ceiling: float, **kw):
+    """A servo for this game: its calibrated rates, the measured geometry and
+    dead time, and the user's own stick ceiling."""
+    from src.spectator.calibration import GameCalibration
+    from src.spectator.servo import Servo, steady_rates
+    recipe = env.recipe
+    cal = GameCalibration.load(str(recipe.get("calibration") or recipe["name"]))
+    servo = Servo(steady_rates(cal), env.assist_focal, dead_time=dead_time, ceiling=ceiling, **kw)
+    pitch_rate = float(recipe.get("pitch_rate_deg_per_s") or 0.0)
+    yaw_rate = servo.rate_for_magnitude(0.6)
+    if pitch_rate > 0 and yaw_rate > 0:
+        servo.pitch_scale = pitch_rate / yaw_rate
+    return servo
+
+
+def assist_dead_time(env: GameEnv, act: NimbusActuator, magnitude: float = 0.6, tries: int = 3) -> Optional[float]:
+    """Seconds between commanding a rate and the loop seeing the view move.
+
+    The whole round trip as the servo meets it: the driver, the game's next
+    poll, its render, and the oracle's own publishing rate. Measured rather
+    than assumed, because a servo told less than the truth overshoots by
+    roughly the difference (tests/test_assist_servo.py).
+    """
+    samples = []
+    for _ in range(tries):
+        env.front()
+        base = env.oracle.pose()
+        if not base:
+            continue
+        on_qt(lambda: act.bridge.setAxis("rx", magnitude))
+        t0 = time.monotonic()
+        seen = None
+        while time.monotonic() - t0 < 1.5:
+            p = env.oracle.pose(timeout=0.2, tries=1)
+            if p and abs(wrap_deg(p["ang"][1] - base["ang"][1])) > 0.5:
+                seen = time.monotonic() - t0
+                break
+        on_qt(lambda: act.bridge.setAxis("rx", 0.0))
+        time.sleep(0.5)
+        env.reset()
+        if seen:
+            samples.append(seen)
+    if not samples:
+        return None
+    return sorted(samples)[len(samples) // 2]
+
+
+def assist_snap(env: GameEnv, act: NimbusActuator, runner, servo, cfg: Dict[str, Any],
+                max_hold: float, settle_deg: float = 1.0, wait: bool = True) -> Dict[str, Any]:
+    """Run one ``look_at`` through the bridge's own runner and score it."""
+    from game_harness import clipboard_read
+    from src.spectator.targets import ScriptTargetSource, TargetSelector
+    source = ScriptTargetSource(lambda: clipboard_read(tries=3), (env.w, env.h))
+    selector = TargetSelector(fov_px=float(env.w))
+    settle_px = abs(servo.px_from_deg(settle_deg))
+    started = time.monotonic()
+    plan = on_qt(lambda: runner.look_at(source, servo, max_hold=max_hold, settle_px=settle_px,
+                                        settle_ms=float(cfg.get("settle_ms", 120.0)),
+                                        cancel_px=float(cfg.get("cancel_px", 6.0)),
+                                        selector=selector))
+    out: Dict[str, Any] = {"plan": plan, "started": started, "runner": runner, "servo": servo}
+    if plan is None:
+        out.update({"elapsed": 0.0, "look": {}, "overshoot": None})
+        return out
+    if wait:
+        deadline = started + max_hold + 2.0
+        while on_qt(lambda: runner.busy) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        out.update(assist_result(env, runner, started))
+    return out
+
+
+def assist_result(env: GameEnv, runner, started: float) -> Dict[str, Any]:
+    """What a finished ``look_at`` did: how long, why it ended, how far past."""
+    look = on_qt(lambda: dict(runner.last_look))
+    samples = [s for s in (look.get("samples") or []) if "deg_x" in s]
+    over = None
+    if samples:
+        sign = 1.0 if samples[0]["deg_x"] >= 0 else -1.0
+        over = max(0.0, max(-sign * float(s["deg_x"]) for s in samples))
+    return {"elapsed": time.monotonic() - started, "look": look, "overshoot": over,
+            "reason": look.get("reason"), "settled": bool(look.get("settled"))}
+
+
+def assist_note(res: Dict[str, Any], target: Optional[Dict[str, float]]) -> str:
+    look = res.get("look") or {}
+    bits = [f"{res.get('reason')} after {res.get('elapsed', 0.0) * 1000:.0f} ms",
+            f"{look.get('ticks', 0)} ticks, {look.get('frames', 0)} with a target"]
+    if res.get("overshoot") is not None:
+        bits.append(f"overshoot {res['overshoot']:.2f} deg")
+    if target:
+        bits.append(f"left {target['bearing']:+.2f} deg off, {target['elevation']:+.2f} in pitch")
+    return "; ".join(bits)
+
+
+def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -> None:
+    """Target-aware assistance, phase 1: the closed loop against a script oracle.
+
+    T0 the gate, T1 the geometry and the loop's own dead time, T2 a snap onto
+    a target standing still, T3 onto one walking, T4 silence, T5 the user
+    taking over, T6 the target gone, T7 the kill switch, T8 the ceiling.
+    Everything here needs a target oracle, which for now means Arma 3's
+    generated mission; any other game skips.
+    """
+    from src.spectator.policy import AssistPolicy, foreground_window, running_anticheat, running_process_names
+    from src.spectator.servo import fov_deg
+    oracle = env.oracle
+    if not hasattr(oracle, "spawn_target"):
+        record("T0 assist", True, "this game publishes no targets; the closed loop needs an oracle, skipped")
+        return
+    cfg = dict(env.recipe.get("assist") or {})
+    range_m = float(cfg.get("range_m", 30.0))
+    runner = on_qt(lambda: act.bridge.get_spectator())
+
+    # T0 the gate: who may run this at all
+    env.front()
+    title, image = foreground_window()
+    running = running_process_names()
+    app = AssistPolicy().check(title, image, running)
+    harness = AssistPolicy(allow_test_entries=True).check(title, image, running)
+    guarded = AssistPolicy(allow_test_entries=True).check(title, image, list(running) + ["BEService_x64.exe"])
+    anticheat = running_anticheat(running)
+    record("T0a gate: the app refuses this title, which is a harness entry and not a shipped one",
+           not app.allowed, app.reason)
+    record("T0b gate: an anti-cheat refuses it whatever the allowlist says", not guarded.allowed, guarded.reason)
+    if anticheat:
+        record(f"T0c gate: {anticheat} is running, so nothing target-aware runs here at all",
+               not harness.allowed, harness.reason)
+        print("[harness] this run is the anti-cheat control: the policy refused before any loop started. "
+              "The recipe without it is where the closed loop is measured.", flush=True)
+        return
+    record("T0c gate: with no anti-cheat running, the harness's own entry allows the loop", harness.allowed,
+           harness.reason)
+    if not harness.allowed:
+        return
+
+    # T1 the geometry: pixels to degrees from the oracle, and from the frames
+    fits = []
+    for bearing in [float(b) for b in cfg.get("fit_bearings", [-15.0, -5.0, 5.0, 15.0])]:
+        env.front()
+        time.sleep(0.2)
+        if not oracle.spawn_target(bearing, range_m):
+            continue
+        seen = oracle.target()
+        if not seen or abs(seen["bearing"]) < 0.5:
+            continue
+        dx = (seen["sx"] - 0.5) * env.w
+        fits.append(dx / math.tan(math.radians(seen["bearing"])))
+    oracle.delete_target()
+    if not fits:
+        record("T1 px/deg: the mission never put a target on screen", False,
+               "worldToScreen returned nothing, or the unit was not placed")
+        return
+    focal = sorted(fits)[len(fits) // 2]
+    spread = (max(fits) - min(fits)) / abs(focal) if focal else 9.9
+    if focal <= 0:
+        record("T1 px/deg: the screen's x axis runs the way the target source assumes", False,
+               f"a target to the right of the view came back left of centre ({focal:.0f} px per radian): "
+               f"the source would have to mirror x, and every error would otherwise be steered backwards")
+        return
+    env.assist_focal = focal
+    env.measured.setdefault("T1", {})["focal_px"] = {"unit": "px", "value": round(focal, 1)}
+    record("T1a px/deg: the oracle's own sightings agree on one focal length", spread <= 0.05,
+           f"{focal:.0f} px per radian, {abs(focal) * math.pi / 180.0:.1f} px per degree at the centre, "
+           f"a {fov_deg(env.w, focal):.1f} degree field of view across {env.w} px, spread {spread * 100:.1f}%")
+    env.front()
+    r = env.step({"rx": 0.6}, 0.4, "assist_px_per_deg")
+    env.reset()
+    peak = moving_peak(r.get("motion"), env.thresholds)
+    if peak is None or not r.get("d_yaw"):
+        record("T1b px/deg: the frames agree with the oracle", True,
+               "no believable frame shift to compare with; the oracle's own figure stands")
+    else:
+        frames = abs(float(peak["dx"])) / abs(math.tan(math.radians(float(r["d_yaw"]))))
+        off = abs(frames - focal) / abs(focal)
+        record("T1b px/deg: the frames agree with the oracle within 10 percent", off <= 0.10,
+               f"{frames:.0f} px per radian from a {r['d_yaw']:+.1f} degree turn measured by phase correlation, "
+               f"against {focal:.0f} from the oracle, {off * 100:.1f}% apart")
+    env.front()
+    time.sleep(0.2)
+    if oracle.spawn_target(0.0, range_m):
+        before_pitch = oracle.target()
+        on_qt(lambda: act.bridge.setAxis("ry", 0.6))
+        time.sleep(0.35)
+        on_qt(lambda: act.bridge.setAxis("ry", 0.0))
+        time.sleep(0.4)
+        after_pitch = oracle.target()
+        if before_pitch and after_pitch:
+            d_el = after_pitch["elevation"] - before_pitch["elevation"]
+            d_sy = after_pitch["sy"] - before_pitch["sy"]
+            record("T1d geometry: the screen's y axis runs down, which is what the target source assumes",
+                   abs(d_el) > 1.0 and d_el * d_sy < 0,
+                   f"the stick up moved the view {-d_el:+.1f} degrees up and the target {d_sy * env.h:+.0f} px "
+                   f"down the frame; the same sign both ways would mean the vertical axis is steered backwards")
+        else:
+            record("T1d geometry: the screen's y axis runs down", False, "no target to watch while pitching")
+        oracle.delete_target()
+        env.reset()
+        env.level_pitch()
+    dead = assist_dead_time(env, act)
+    if dead is None:
+        record("T1c the loop's own dead time", False, "the view never moved for a stick command")
+        return
+    env.assist_dead_time = max(0.08, min(0.25, dead * float(cfg.get("dead_time_pessimism", 1.4))))
+    env.measured.setdefault("T1", {})["dead_time_ms"] = {"unit": "ms", "value": round(dead * 1000.0, 1)}
+    record("T1c the loop's own dead time is inside the 60 to 120 ms the plan budgeted",
+           0.02 <= dead <= 0.20,
+           f"{dead * 1000:.0f} ms measured from the command to the view moving; the servo is told "
+           f"{env.assist_dead_time * 1000:.0f} ms, which is the pessimism a servo needs to not overshoot")
+
+    ceiling = act.expected("right", 1.0)
+    snap_ms = float(cfg.get("snap_ms", 600.0)) / 1000.0
+    wide_ms = float(cfg.get("wide_snap_ms", 1200.0)) / 1000.0
+    settle_deg = float(cfg.get("settle_deg", 1.0))
+
+    # T2 a snap onto a target standing still. The tolerance is the plan's one
+    # degree or the servo's own floor, whichever is larger: under that floor
+    # the rate wanted is below the game's stick deadzone and the servo
+    # commands nothing, so a tighter gate would be a check that cannot pass.
+    visible = 0.45 * fov_deg(env.w, env.assist_focal)
+    for bearing in [float(b) for b in cfg.get("snap_bearings", [5.0, 15.0, 30.0])]:
+        if abs(bearing) > visible:
+            record(f"T2 snap: a target {bearing:.0f} degrees off centre", True,
+                   f"outside the {visible * 2:.0f} degree window this game draws, so it would not be on "
+                   f"screen and nothing may engage a target the user cannot see; skipped")
+            continue
+        env.front()
+        time.sleep(0.2)
+        if not oracle.spawn_target(bearing, range_m):
+            record(f"T2 snap {bearing:.0f} degrees", False, "the mission did not put a target on screen")
+            continue
+        budget = snap_ms if abs(bearing) <= 15.0 else wide_ms
+        before = oracle.target()
+        servo = assist_servo(env, act, env.assist_dead_time, ceiling)
+        tol = max(settle_deg, 1.2 * servo.settle_floor_deg)
+        res = assist_snap(env, act, runner, servo, cfg, max_hold=budget, settle_deg=tol)
+        after = oracle.target()
+        ok = (res.get("settled") and res.get("elapsed", 9.9) <= budget + 0.1
+              and after is not None and abs(after["bearing"]) <= tol
+              and (res.get("overshoot") or 0.0) <= 2.0)
+        env.measured.setdefault("T2", {})[f"{bearing:.0f}"] = {"unit": "ms",
+                                                               "value": round(res.get("elapsed", 0.0) * 1000, 1)}
+        record(f"T2 snap: a target {bearing:.0f} degrees off settles inside {budget * 1000:.0f} ms, "
+               f"within {tol:.2f} degrees, without overshooting", bool(ok),
+               (f"from {before['bearing']:+.1f} deg; " if before else "") + assist_note(res, after)
+               + f"; the servo stops commanding under {servo.settle_floor_deg:.2f} degrees, "
+                 f"which is this game's stick deadzone over the gain")
+        oracle.delete_target()
+        env.reset()
+
+    # T3 a snap onto one that is walking, with the velocity lead and without
+    walk_range = float(cfg.get("walk_range_m", 20.0))
+    walk_bearing = float(cfg.get("walk_bearing", 20.0))
+    for speed in [float(s) for s in cfg.get("walk_speeds", [1.0, 2.0])]:
+        results = {}
+        for lead in (True, False):
+            env.front()
+            time.sleep(0.2)
+            if not oracle.spawn_target(walk_bearing, walk_range):
+                continue
+            oracle.walk_target(speed)
+            time.sleep(0.5)
+            servo = assist_servo(env, act, env.assist_dead_time, ceiling, lead=lead)
+            res = assist_snap(env, act, runner, servo, cfg, max_hold=wide_ms,
+                              settle_deg=max(1.5, 1.2 * servo.settle_floor_deg))
+            after = oracle.target()
+            results[lead] = (res, after)
+            oracle.delete_target()
+            env.reset()
+        if True not in results:
+            record(f"T3 snap onto a target walking at {speed:.0f} m/s", False, "no target was placed")
+            continue
+        res, after = results[True]
+        crossing = abs(math.degrees(math.atan(speed / max(1.0, walk_range))))
+        tol = max(1.5, 1.2 * res["servo"].settle_floor_deg)
+        ok = res.get("settled") and after is not None and abs(after["bearing"]) <= tol
+        record(f"T3 snap: a target walking at {speed:.0f} m/s at {walk_range:.0f} m "
+               f"(about {crossing:.1f} degrees a second) settles within {tol:.2f} degrees", bool(ok),
+               assist_note(res, after))
+        if False in results:
+            blind, blind_after = results[False]
+            with_lead = abs(after["bearing"]) if after else 9.9
+            without = abs(blind_after["bearing"]) if blind_after else 9.9
+            record(f"T3b the velocity lead is what does it at {speed:.0f} m/s", with_lead <= without,
+                   f"{with_lead:.2f} degrees off with the lead, {without:.2f} without")
+
+    # T4 silence: a target on screen, nothing asked for, nothing sent
+    env.front()
+    time.sleep(0.2)
+    if oracle.spawn_target(10.0, range_m):
+        act.release()
+        time.sleep(0.2)
+        before = env.oracle.pose()
+        worst = 0.0
+        for _ in range(30):
+            sent = act.sent()
+            worst = max(worst, abs(float(sent.get("right_x", 0.0))), abs(float(sent.get("right_y", 0.0))))
+            time.sleep(0.05)
+        after_pose = env.oracle.pose()
+        moved = abs(pose_delta(before, after_pose).get("d_yaw", 0.0)) if before and after_pose else 9.9
+        record("T4 silence: a target on screen with nothing asked for sends nothing and moves nothing",
+               worst < 1e-6 and moved <= 1.0 and not on_qt(lambda: runner.busy),
+               f"largest right stick value {worst:.4f} over 1.5 s, view moved {moved:.2f} degrees")
+        oracle.delete_target()
+        env.reset()
+
+    # T5 the user takes over
+    env.front()
+    time.sleep(0.2)
+    if oracle.spawn_target(25.0, range_m):
+        servo = assist_servo(env, act, env.assist_dead_time, ceiling)
+        started = assist_snap(env, act, runner, servo, cfg, max_hold=2.0, wait=False)
+        time.sleep(0.25)
+        nudge = float(cfg.get("cancel_drag_px", 10.0))
+        act.apply({"rx_px": nudge})
+        time.sleep(0.08)
+        busy = on_qt(lambda: runner.busy)
+        sent = float(act.sent().get("right_x", 0.0))
+        res = assist_result(env, runner, started["started"])
+        expected = act.expected("right", nudge / act.travel("right"))
+        act.release()
+        record("T5 the user takes over: a drag on their own stick stops the snap and the driver is left "
+               "holding the user's vector, not the loop's",
+               (not busy) and res.get("reason") == "user" and abs(sent - expected) <= 0.02,
+               f"{res.get('reason')}; the driver has RX={sent:+.3f} and the bridge's own value for a "
+               f"{nudge:.0f} px drag is {expected:+.3f}")
+        oracle.delete_target()
+        env.reset()
+
+    # T6 the target disappears
+    env.front()
+    time.sleep(0.2)
+    if oracle.spawn_target(20.0, range_m):
+        servo = assist_servo(env, act, env.assist_dead_time, ceiling)
+        started = assist_snap(env, act, runner, servo, cfg, max_hold=3.0, wait=False)
+        time.sleep(0.3)
+        oracle.delete_target()
+        gone_at = time.monotonic()
+        while on_qt(lambda: runner.busy) and time.monotonic() - gone_at < 2.0:
+            time.sleep(0.01)
+        released = time.monotonic() - gone_at
+        res = assist_result(env, runner, started["started"])
+        sent = act.sent()
+        tail = [float(s.get("mx", 0.0)) for s in (res.get("look", {}).get("samples") or [])][-4:]
+        record("T6 the target goes: the command decays to nothing and the primitive ends uncompleted",
+               res.get("reason") == "lost" and released <= 0.45
+               and abs(float(sent.get("right_x", 0.0))) < 1e-6,
+               f"{res.get('reason')} {released * 1000:.0f} ms after the unit was deleted, last commands "
+               f"{[round(v, 3) for v in tail]}, driver RX={float(sent.get('right_x', 0.0)):+.3f}")
+        env.reset()
+
+    # T7 the kill switch
+    env.front()
+    time.sleep(0.2)
+    if oracle.spawn_target(25.0, range_m):
+        servo = assist_servo(env, act, env.assist_dead_time, ceiling)
+        started = assist_snap(env, act, runner, servo, cfg, max_hold=3.0, wait=False)
+        time.sleep(0.25)
+        t0 = time.monotonic()
+        on_qt(lambda: act.bridge.stopControllerMode())
+        busy = on_qt(lambda: runner.busy)
+        took = time.monotonic() - t0
+        sent = act.sent()
+        res = assist_result(env, runner, started["started"])
+        record("T7 kill switch: the path Ctrl+Alt+F12 takes releases the axes at once",
+               (not busy) and abs(float(sent.get("right_x", 0.0))) < 1e-6 and res.get("reason") == "stopped",
+               f"{res.get('reason')} in {took * 1000:.0f} ms, driver RX={float(sent.get('right_x', 0.0)):+.3f}")
+        oracle.delete_target()
+        env.reset()
+
+    # T8 the ceiling
+    env.front()
+    time.sleep(0.2)
+    low = min(0.5, ceiling)
+    far = min(float(cfg.get("ceiling_bearing", 30.0)), visible)
+    if oracle.spawn_target(far, range_m):
+        servo = assist_servo(env, act, env.assist_dead_time, low)
+        res = assist_snap(env, act, runner, servo, cfg, max_hold=wide_ms, settle_deg=settle_deg)
+        sent_max = max([abs(float(s.get("mx", 0.0))) for s in (res.get("look", {}).get("samples") or [])] or [9.9])
+        after = oracle.target()
+        record(f"T8 ceiling: with the stick capped at {low:.2f} the servo never asks for more",
+               sent_max <= low + 1e-9,
+               f"largest magnitude {sent_max:.3f} against a {low:.2f} ceiling ({ceiling:.2f} is what this "
+               f"widget gives the user); " + assist_note(res, after))
+        oracle.delete_target()
+        env.reset()
 
 # ---- drivers -------------------------------------------------------------------
 def summary(env: Optional[GameEnv], args: argparse.Namespace) -> int:
@@ -844,6 +1250,9 @@ def main() -> int:
     ap.add_argument("--profile", default=None,
                     help="nimbus: an existing profile id to run instead of the throwaway copy of the bundled one")
     ap.add_argument("--keep-game", action="store_true", help="leave the game running at the end")
+    ap.add_argument("--assist", action="store_true",
+                    help="nimbus: run the target-aware closed loop (T0 to T8) against the recipe's target "
+                         "oracle, after the primitives; needs a game that publishes targets (Arma 3)")
     ap.add_argument("--write-reset-pose", action="store_true",
                     help="write the first pose read into the recipe when it has none")
     ap.add_argument("--cal-mags", default=DEFAULT_CAL_MAGS, help="G12: right-stick magnitudes for the hold-time table")

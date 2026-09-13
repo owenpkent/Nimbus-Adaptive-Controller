@@ -98,5 +98,35 @@
             "tol_pct": 20.0,
             "tol_abs": 10.0
         }
+    },
+    "calibration": "arma3",
+    "assist": {
+        "range_m": 30.0,
+        "fit_bearings": [
+            -15.0,
+            -5.0,
+            5.0,
+            15.0
+        ],
+        "snap_bearings": [
+            5.0,
+            15.0,
+            30.0
+        ],
+        "snap_ms": 600.0,
+        "wide_snap_ms": 1200.0,
+        "settle_deg": 1.0,
+        "settle_ms": 120.0,
+        "cancel_px": 6.0,
+        "cancel_drag_px": 10.0,
+        "walk_speeds": [
+            1.0,
+            2.0
+        ],
+        "walk_range_m": 20.0,
+        "walk_bearing": 20.0,
+        "ceiling_bearing": 30.0,
+        "dead_time_pessimism": 1.4,
+        "notes": "Phase 1 of TARGET_AWARE_AIM_PLAN.md. The mission places the target with NIMBUS_SPAWN at a bearing off where the player is looking and publishes its head through worldToScreen on every pose line; the harness reads that line as a target source and scores the snap in degrees from the same line's bearing. snap_ms is the plan's budget for a target inside the assist radius; wide_snap_ms is for the 30 degree case, which is wider than any shipped tier would engage and takes longer because the gain is set by the dead time. dead_time_pessimism is deliberate: a servo told less than the truth overshoots by about the difference."
     }
 }

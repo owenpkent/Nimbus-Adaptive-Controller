@@ -146,6 +146,11 @@ except Exception:
 # plain pulse against the active Xbox-style interface.
 _USE_MOUSE_HIDER = sys.platform == "win32"
 
+# Pixels of drag for full deflection when a joystick widget sets no
+# travel_px of its own (QML then uses the drawn radius, which only QML
+# knows). Used to read a normalised deflection back as pixels.
+DEFAULT_TRAVEL_PX = 100.0
+
 # Mouse isolation has two bridge-side implementations in this file. Windows
 # drives the real cursor from the filter's packets (the cursor relay); every
 # other platform draws its own cursor and synthesises Qt events. This flag
@@ -437,6 +442,7 @@ class ControllerBridge(QObject):
         return self._output.active
 
     # ----- Spectator+ -----
+    @Slot(result=QObject)
     def get_spectator(self):
         """The Spectator+ primitive runner bound to this bridge's output.
 
@@ -463,6 +469,26 @@ class ControllerBridge(QObject):
                 self._spectator.stop()
             except Exception:
                 pass
+
+    def _spectator_user_stick(self, widget_id: str, nx: float, ny: float) -> None:
+        """Hand control back when the user moves their own stick under a closed loop.
+
+        Section 5's fail-safe rule: any user stick motion above a threshold
+        cancels a running snap. This runs before the stick is driven, so the
+        primitive's axes are released first and what the driver is left
+        holding is the user's own vector rather than the loop's last command.
+        The widget's ``travel_px`` turns the normalised deflection back into
+        the pixels the threshold is written in.
+        """
+        runner = self._spectator
+        if runner is None or not getattr(runner, "watching_user", False):
+            return
+        try:
+            w = self._widget_shaping.get(str(widget_id)) or {}
+            travel = float(w.get("travel_px") or 0.0) or DEFAULT_TRAVEL_PX
+            runner.note_user_stick(float(nx) * travel, float(ny) * travel)
+        except Exception:
+            pass
 
     # ----- Scale factor property -----
     def _get_scale(self) -> float:
@@ -1051,6 +1077,7 @@ class ControllerBridge(QObject):
                 self._last_raw.pop(str(widget_id), None)
             else:
                 self._last_raw[str(widget_id)] = raw
+            self._spectator_user_stick(str(widget_id), raw[0], raw[1])
             self._drive_stick(str(widget_id), w, raw[0], raw[1])
         except Exception:
             pass
