@@ -170,11 +170,46 @@ if (-not $Phase2) {
     $results | ConvertTo-Json | Set-Content -Path (Join-Path $root 'setup-done.json') -Encoding UTF8
 } else {
     Step 'vdd' {
+        # winget's package is the portable VDD Control app: an exe, devcon,
+        # the signed driver and a settings file, extracted and nothing
+        # installed. The control app installs the driver from a GUI, so do
+        # its work here: settings file where the driver reads it, the
+        # signer into TrustedPublisher (a fresh guest has never seen
+        # SignPath Foundation, and a silent install fails on that with
+        # 0xE0000242), the package into the driver store, then a
+        # root-enumerated device node with the bundled devcon.
         $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
         if (-not $winget) { throw 'winget is not available in this session; install VirtualDrivers.Virtual-Display-Driver by hand (github.com/VirtualDrivers/Virtual-Display-Driver)' }
-        $out = & winget.exe install --id VirtualDrivers.Virtual-Display-Driver -e --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0) { throw "winget exited $LASTEXITCODE`: $($out.Trim())" }
-        'installed'
+        $pkg = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'VirtualDrivers.Virtual-Display-Driver*' } | Select-Object -First 1
+        if (-not $pkg) {
+            $out = & winget.exe install --id VirtualDrivers.Virtual-Display-Driver -e --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) { throw "winget exited $LASTEXITCODE`: $($out.Trim())" }
+            $pkg = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Directory |
+                Where-Object { $_.Name -like 'VirtualDrivers.Virtual-Display-Driver*' } | Select-Object -First 1
+            if (-not $pkg) { throw 'winget reported success but the package folder is missing' }
+        }
+        $drv = Join-Path $pkg.FullName 'SignedDrivers\x86\VDD'      # the folder name says x86; the INF is NTamd64
+        $inf = Join-Path $drv 'MttVDD.inf'
+        if (-not (Test-Path $inf)) { throw "no MttVDD.inf under $drv" }
+        if (Get-PnpDevice -Class Display -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -eq 'Virtual Display Driver' -and $_.Status -eq 'OK' }) { return 'already installed' }
+        New-Item -ItemType Directory -Path 'C:\VirtualDisplayDriver' -Force | Out-Null
+        Copy-Item (Join-Path $pkg.FullName 'Dependencies\vdd_settings.xml') 'C:\VirtualDisplayDriver\vdd_settings.xml' -Force
+        $sig = Get-AuthenticodeSignature (Join-Path $drv 'mttvdd.cat')
+        if ($sig.Status -ne 'Valid') { throw "driver catalog signature is $($sig.Status)" }
+        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('TrustedPublisher', 'LocalMachine')
+        $store.Open('ReadWrite'); $store.Add($sig.SignerCertificate); $store.Close()
+        $out = & pnputil.exe /add-driver $inf /install 2>&1 | Out-String
+        if ($LASTEXITCODE -notin 0, 259) { throw "pnputil exited $LASTEXITCODE`: $($out.Trim())" }
+        $hwid = (Select-String -Path $inf -Pattern '(Root\\[A-Za-z0-9_]+)' | Select-Object -First 1).Matches[0].Groups[1].Value
+        $node = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -contains $hwid }
+        if (-not $node) {
+            & (Join-Path $pkg.FullName 'Dependencies\devcon.exe') install $inf $hwid 2>&1 | Out-Null
+        }
+        Start-Sleep -Seconds 8
+        $mon = Get-PnpDevice -Class Monitor -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'VDD' -and $_.Status -eq 'OK' }
+        if (-not $mon) { throw 'the driver installed but no VDD monitor appeared' }
+        "installed; signer $($sig.SignerCertificate.Subject); monitor $($mon.FriendlyName)"
     }
     Step 'render' {
         $py = Join-Path $root 'python\python.exe'
