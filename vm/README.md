@@ -25,7 +25,7 @@ Nimbus does not manage VMs.
 | 4 | `40-new-guest.ps1` | **yes** | no | Applies the image to a new VHDX, writes the answer file and `C:\nimbus` onto it, creates the Generation 2 VM with a vTPM, turns host Enhanced Session Mode off, starts it. First boot is unattended. |
 | 5 | `50-attach-gpu.ps1` | **yes** | no | The partition adapter, the memory-mapped I/O and cache settings, the driver files into the guest's HostDriverStore. `-Verify` runs the in-guest render check: **Gate B, part 2.** |
 | 6 | `60-guest-stream.ps1` | Hyper-V admin | no | Guest phase 2 (virtual display, render check), Moonlight on the host, pairing by PIN through Sunshine's API, the background-gamepad setting. |
-| 7 | `gate_c_host.py` | none | no | **Gate C:** host input sweeps against the guest's counters, 14 buttons in order, stick holds, a held stick through host focus, Stop within 500 ms. `--actuator pad` then `--actuator nimbus`. |
+| 7 | `gate_c_host.py` | none | no | **Gate C:** host input sweeps against the guest's counters, 14 buttons in order, stick holds, a held stick through host focus, Stop within 500 ms. `--actuator pad` then `--actuator nimbus`, with `--viewer-title Moonlight` so the sweep runs with the viewer focused. |
 
 Everything lives under `C:\NimbusVM` (override with `-VmRoot` or
 `NIMBUS_VM_ROOT`): `iso\`, `disks\`, `logs\` (every gate writes a JSON
@@ -55,20 +55,34 @@ Copied to `C:\nimbus` on the guest disk by step 4.
   keyboard events (hardware and injected apart), polls XInput and logs pad
   transitions, answers on `http://<guest>:47100/snapshot`.
 
-## Before you enable Hyper-V here
+## State of the dev machine
 
-- **It reboots the driver baseline.** THREADMASTER is the machine every
-  mouse filter number in `docs/vision` was measured on. With the role on,
-  Windows itself runs as a partition above the hypervisor. Re-run the filter
-  suites before trusting a new driver measurement, and note the change in
-  the results log.
+Hyper-V has been enabled on THREADMASTER since 2026-09-13 and the guest
+`NimbusGuest` exists (Windows 11 Pro 25H2, 16 GB, 8 vCPU, the GPU partition
+attached, Sunshine paired with the host's Moonlight). Its address on the
+Default Switch comes from DHCP; `60-guest-stream.ps1` prints the current
+one, or `(Get-VMNetworkAdapter NimbusGuest).IPAddresses`. The console user
+is in Hyper-V Administrators, so everything except steps 1, 4 and 5 runs
+from a normal prompt.
+
+What that changed, and what to keep in mind:
+
+- **The driver baseline moved.** THREADMASTER is the machine every mouse
+  filter number in `docs/vision` was measured on, and Windows now runs as a
+  partition above the hypervisor. Re-run the filter suites before trusting
+  a new driver measurement, and note the change in the results log.
+  `10-enable-hyperv.ps1 -Disable` and a reboot take the host back.
 - **VirtualBox 7.2.8 is installed.** With Hyper-V on it falls back to the
-  Hyper-V API and its guests run markedly slower. `10-enable-hyperv.ps1 -Disable`
-  reverses the role (another reboot).
+  Hyper-V API and its guests run markedly slower.
 - **The mouse filter.** Step 1 runs `driver\check-mouse-filter.ps1` and
   refuses if the filter is registered but unloadable, because that is the
   configuration that boots with no mouse. On 2026-09-13 the filter was not
-  installed and test signing was off, so the reboot was safe.
+  installed and test signing was off, so the reboot was safe. Its behaviour
+  above the hypervisor has not been measured.
+- **Gate C moves the host mouse.** `gate_c_host.py` synthesizes host
+  pointer and keyboard input and focuses the viewer window, the same way
+  the game harness takes the machine: run it unattended and leave the mouse
+  alone while it runs.
 
 ## What the first run found (2026-09-13)
 

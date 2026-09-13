@@ -21,6 +21,8 @@ Two gates decide the whole question and both are cheap:
 
 If either gate fails, stop. Neither needs a VM built to answer.
 
+*2026-09-13:* both passed on the dev machine (section 10.7), and so did Gate C. What remains is Gate D, the comparison that decides whether any of it is worth integrating.
+
 ## 2. What a Windows host actually permits
 
 The option set collapses hard once the host is Windows. This is the main consequence of the change and it removes most of the earlier draft.
@@ -38,6 +40,8 @@ So "a VM on the Windows host" means precisely one thing: a Hyper-V guest using G
 
 **Operational warning before anyone enables it.** Turning on Hyper-V makes Windows run as a root partition above the hypervisor, and it requires a reboot. THREADMASTER is the machine every driver measurement in `docs/vision/` was taken on, with a test-signed kernel mouse filter, vJoy and ViGEmBus installed and Secure Boot off. Do not enable Hyper-V there casually: it perturbs the baseline for the filter work, and a reboot ends the working session. If this track is pursued, do it on a machine that is not the driver baseline, or plan the reboot and the re-validation.
 
+*2026-09-13:* it was enabled on THREADMASTER that evening, with the reboot planned and the mouse filter not installed at the time (section 10.7). Every driver measurement from that date on is taken above the hypervisor; `vm\10-enable-hyperv.ps1 -Disable` and a reboot take the host back if a measurement needs the old baseline. vJoy and ViGEmBus kept working (the Gate C runs used both).
+
 ## 3. The dev machine, measured 2026-09-12
 
 Replacing the hardware inventory in the earlier draft, which described the sandbox the document was written in rather than any machine this project uses.
@@ -49,7 +53,7 @@ Replacing the hardware inventory in the earlier draft, which described the sandb
 | Memory | 31.9 GiB | Not a constraint. A 16 GiB guest leaves the host comfortable |
 | GPU | One AMD Radeon RX 6600 XT, 8 GiB, driver 31.0.14043.7000 | **The deciding fact.** No integrated graphics on a 3950X, so there is no second adapter to leave with the host |
 | Disk | 297 GiB free of 930 GiB on C: | A guest plus a small Steam library fits. A large library does not |
-| Hyper-V | Role not installed: no Hyper-V PowerShell module, no `vmms` or `vmcompute` service | Nothing has been changed on this machine. Enabling it is a deliberate, rebooting act |
+| Hyper-V | Role not installed: no Hyper-V PowerShell module, no `vmms` or `vmcompute` service (until 2026-09-13; enabled since, section 10.7) | Nothing had been changed on this machine. Enabling it is a deliberate, rebooting act |
 | Other | TeamViewer Virtual Monitor Adapter present | Relevant to display-path experiments, and a reminder that TeamViewer injects above the mouse class filter |
 
 The single-GPU finding is what makes this short. The earlier draft listed "single-GPU full passthrough" as "exclude initially" on general principle. On this machine it is excluded on fact, because the host would go dark and Nimbus is a panel on the host desktop.
@@ -127,13 +131,13 @@ Add an optional `guest_controller` transport behind the existing output abstract
 
 ## 8. Remaining questions
 
-Section 10 answers the first from published policy and turns the second into one command to run after a reboot.
+Section 10 answers the first four from published policy and from the runs of 2026-09-13; the last three are still open and are what Gate D and a real user would answer.
 
-- Does any title that Nimbus users want both need isolation and start inside a Hyper-V guest?
-- Does GPU-PV partition an RX 6600 XT, and does a guest driver initialize against it?
-- What does enabling Hyper-V do to the mouse filter, vJoy and ViGEmBus on the same machine?
-- Does the encode and decode round trip on a single GPU leave acceptable frame times while that GPU also renders the game?
-- Does the viewer keep forwarding the pad while Nimbus holds host focus?
+- Does any title that Nimbus users want both need isolation and start inside a Hyper-V guest? *Narrowly yes (the Source titles, and the EAC titles in their no-anti-cheat modes); no kernel-anti-cheat title with its anti-cheat on is known to (10.2).*
+- Does GPU-PV partition an RX 6600 XT, and does a guest driver initialize against it? *Yes and yes, on driver 23.4.1 (10.7).*
+- What does enabling Hyper-V do to the mouse filter, vJoy and ViGEmBus on the same machine? *vJoy and ViGEmBus kept working; the filter was not installed at the time, so its behaviour above the hypervisor is unmeasured (10.7).*
+- Does the encode and decode round trip on a single GPU leave acceptable frame times while that GPU also renders the game? *Not measured; Gate D.*
+- Does the viewer keep forwarding the pad while Nimbus holds host focus? *Yes, with Moonlight's background gamepad setting on (10.7).*
 - Is there any user for whom "no kernel driver" outweighs a second Windows license and an encoder?
 - If the answer to the last question is a real user, does a second physical machine serve them better?
 
@@ -207,9 +211,9 @@ Run today, on the host:
 | Every `.ps1` parsed; 10, 40 and 50 refuse unelevated; 20 exits 2 with Hyper-V off | as designed |
 | `30-fetch-iso.ps1` | the 25H2 ISO, hash recorded |
 
-Not run, because each needs the hypervisor: 20 (the real unknown, whether `Get-VMHostPartitionableGpu` lists this adapter on this driver), 40, 50, 60 and Gate C against a guest. Inside those, four things are written from documentation and will meet reality for the first time: whether the answer file's first-logon command runs elevated (the guest setup warns and continues if not), whether winget works under PowerShell Direct for the virtual display driver, whether Sunshine's `/api/pin` still takes basic authentication on the 2026 release, and the name of Moonlight's background-gamepad key in its settings file (the checkbox is the fallback).
+Not run at that point, because each needs the hypervisor: 20, 40, 50, 60 and Gate C against a guest. Inside those, four things were written from documentation: whether the answer file's first-logon command runs elevated, whether winget works under PowerShell Direct for the virtual display driver, whether Sunshine's `/api/pin` still takes basic authentication on the 2026 release, and Moonlight's background-gamepad setting. All four met reality the same evening; section 10.7 says how each came out (three as hoped, one with a twist: the API takes basic authentication but also needs a `pairing_id`).
 
-### 10.5 The handoff
+### 10.5 The handoff (run the same evening; kept as the procedure)
 
 From an elevated prompt, with nobody depending on the machine for the next ten minutes:
 
