@@ -1,7 +1,7 @@
 # Virtual Machine Feasibility on a Windows Host
 
-**Status:** Research, with the tooling built and Gates A, B and C passed on the dev machine (section 10). The scripts for every gate are in [`vm/`](../../vm/README.md). Hyper-V is enabled on THREADMASTER, a guest exists, its partition of the RX 6600 XT renders, and the isolation claim of Gate C held through the real Moonlight, Sunshine and ViGEm chain with the real app driving. Gate D, the playability comparison against the mouse filter and a second machine, has not been run, and the conclusion of section 1 stands until it is.
-**Date:** 2026-09-11, repointed at a Windows host and remeasured 2026-09-12; tooling built and Gate A answered 2026-09-13, Gates B and C run the same evening.
+**Status:** Research, with the tooling built and Gates A, B and C passed on the dev machine (section 10). The scripts for every gate are in [`vm/`](../../vm/README.md). Hyper-V is enabled on THREADMASTER, a guest exists, its partition of the RX 6600 XT renders, and the isolation claim of Gate C held through the real Moonlight, Sunshine and ViGEm chain with the real app driving. Gate D's latency axis was measured (section 10.8): the guest costs two to five display frames at the median against one natively, so it loses the one axis measured; the rest of Gate D (a real game in the guest, a second machine) was not run. The conclusion of section 1 stands: keep the research, do not integrate.
+**Date:** 2026-09-11, repointed at a Windows host and remeasured 2026-09-12; tooling built and Gate A answered 2026-09-13, Gates B, C and D's latency axis run the same evening.
 **Host:** Windows. Nimbus runs on the host exactly as it ships today; the guest runs the game.
 **Question:** On a Windows host, does putting the game in a guest VM buy Nimbus anything it does not already have?
 **Answer in one line:** Almost certainly not, and the two facts that decide it are cheap to check before any VM is built.
@@ -21,7 +21,7 @@ Two gates decide the whole question and both are cheap:
 
 If either gate fails, stop. Neither needs a VM built to answer.
 
-*2026-09-13:* both passed on the dev machine (section 10.7), and so did Gate C. What remains is Gate D, the comparison that decides whether any of it is worth integrating.
+*2026-09-13:* both passed on the dev machine (section 10.7), and so did Gate C. Gate D's latency axis was then measured (section 10.8) and the guest lost it by two to five frames at the median; the game and second-machine comparisons were not run. Nothing measured moves the answer in the line above.
 
 ## 2. What a Windows host actually permits
 
@@ -125,6 +125,8 @@ Compare the guest against two things, not one: the host running the game nativel
 
 **Pass:** the guest beats both on some axis a user would notice. **Fail, and this is the expected outcome:** keep the research, do not integrate.
 
+*2026-09-13:* the latency axis was measured with a synthetic workload (section 10.8): the guest loses it. The two comparisons with a real game and with a second machine were not run.
+
 ### Gate E: minimal integration (only if D passes)
 
 Add an optional `guest_controller` transport behind the existing output abstraction. Capability checks, session pairing, backend status, per-game selection and receiver recovery. A reconnect or snapshot restore creates a new generation and requires explicit rearming. VM provisioning, GPU binding and OS installation stay in Hyper-V's own tools; Nimbus does not become a VM manager.
@@ -136,7 +138,7 @@ Section 10 answers the first four from published policy and from the runs of 202
 - Does any title that Nimbus users want both need isolation and start inside a Hyper-V guest? *Narrowly yes (the Source titles, and the EAC titles in their no-anti-cheat modes); no kernel-anti-cheat title with its anti-cheat on is known to (10.2).*
 - Does GPU-PV partition an RX 6600 XT, and does a guest driver initialize against it? *Yes and yes, on driver 23.4.1 (10.7).*
 - What does enabling Hyper-V do to the mouse filter, vJoy and ViGEmBus on the same machine? *vJoy and ViGEmBus kept working; the filter was not installed at the time, so its behaviour above the hypervisor is unmeasured (10.7).*
-- Does the encode and decode round trip on a single GPU leave acceptable frame times while that GPU also renders the game? *Not measured; Gate D.*
+- Does the encode and decode round trip on a single GPU leave acceptable frame times while that GPU also renders the game? *Without a game load, input to photon through the chain is two to five frames at the median and up to six at the tail against one natively (10.8); with a game rendering on the same partition, not measured.*
 - Does the viewer keep forwarding the pad while Nimbus holds host focus? *Yes, with Moonlight's background gamepad setting on (10.7).*
 - Is there any user for whom "no kernel driver" outweighs a second Windows license and an encoder?
 - If the answer to the last question is a real user, does a second physical machine serve them better?
@@ -263,7 +265,7 @@ Two things the run taught the tooling. First, a wrong alarm: with a stick held, 
 
 **What Gate C did not test.** Every host input was synthesized with `SendInput`, which Moonlight forwards exactly as it forwards a physical pointer once its window is focused, but the physical mouse and the mouse class stack were not exercised, and nobody opened a basic vmconnect console during the runs. The synthetic Hyper-V mouse of that console is the one remaining pointer path into the guest, and it forwards only while someone clicks inside it.
 
-**Where that leaves the question.** Gates A, B and C passed; the isolation is a configuration property, as section 4 said, and the configuration held. Gate D, the comparison that decides anything (the guest against the host running the game natively under the mouse filter, and against a second machine over Moonlight, on the DirectX 11 titles the harness can measure), has not been run. The costs in 10.6 are unchanged, and one of them now has a number: the pad path through the chain costs about 60 to 90 ms at the Stop, which is the same order as the filter's whole loop.
+**Where that leaves the question.** Gates A, B and C passed; the isolation is a configuration property, as section 4 said, and the configuration held. Gate D, the comparison that decides anything (the guest against the host running the game natively under the mouse filter, and against a second machine over Moonlight, on the DirectX 11 titles the harness can measure), was then run on the one axis the bench allowed, latency, in section 10.8. The costs in 10.6 are unchanged, and two of them now have numbers: the pad path through the chain costs about 60 to 90 ms at the Stop (with the monitor's poll and an HTTP round trip inside that), and input to photon through the whole chain costs two to five frames at the median against one natively.
 
 A second document was reviewed the same evening, [TARGET_AWARE_AIM_PLAN.md](TARGET_AWARE_AIM_PLAN.md), and its section 13.2 records how the two tracks relate.
 

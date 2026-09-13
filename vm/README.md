@@ -5,9 +5,10 @@ a Windows 11 guest on the dev machine that shares the host's GPU through
 Hyper-V GPU paravirtualization, receives Nimbus's pad through Moonlight and
 Sunshine, and is shown on the host through the same stream. The scripts
 follow the document's gates in order and each one refuses to run before its
-predecessor has passed. Built and run through Gate C on 2026-09-13; the
-document's section 10 records what each step met. Gate D, the playability
-comparison, has not been run.
+predecessor has passed. Built and run through Gate C on 2026-09-13, with
+Gate D's latency axis measured the same evening; the document's section 10
+records what each step met and section 10.8 the latency numbers. The rest
+of Gate D (a real game in the guest, a second machine) has not been run.
 
 The document's conclusion has not changed: this track exists to answer two
 cheap questions (does the GPU partition at all, do wanted titles start in a
