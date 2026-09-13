@@ -6,8 +6,9 @@ hardware adapter, printing the feature level it came up at. Meant to run
 inside the guest after 50-attach-gpu.ps1, where the partitioned adapter
 should appear by its host name (for example "AMD Radeon RX 6600 XT") and
 create a device at feature level 11_0 or better. The Hyper-V basic display
-("Microsoft Hyper-V Video") and the WARP software rasterizer are listed but
-do not count. Also runs on the host, which is how it was verified.
+and the WARP software rasterizer are listed but do not count: anything with
+Microsoft's vendor id or the software flag is not a GPU. Also runs on the
+host, which is how it was verified.
 
 Pure ctypes, no packages, so the guest only needs the embeddable Python.
 
@@ -33,6 +34,11 @@ if sys.platform != "win32":
 DXGI_ADAPTER_FLAG_SOFTWARE = 2
 D3D_DRIVER_TYPE_UNKNOWN = 0
 D3D11_SDK_VERSION = 7
+# Microsoft's own vendor id: WARP and the basic display adapter. In a Hyper-V
+# guest without a partition DXGI lists "Microsoft Basic Render Driver" twice,
+# once without the software flag, so the flag alone does not identify a GPU
+# (seen on the first guest boot, 2026-09-13).
+VENDOR_MICROSOFT = 0x1414
 FEATURE_LEVEL_NAMES = {
     0x9100: "9_1", 0x9200: "9_2", 0x9300: "9_3",
     0xA000: "10_0", 0xA100: "10_1",
@@ -107,7 +113,7 @@ def enumerate_adapters() -> List[Dict[str, Any]]:
             break
         desc = DXGI_ADAPTER_DESC1()
         _vcall(adapter, 10, ctypes.c_long, ctypes.POINTER(DXGI_ADAPTER_DESC1))(adapter, ctypes.byref(desc))
-        software = bool(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
+        software = bool(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) or desc.VendorId == VENDOR_MICROSOFT
         level = wintypes.UINT(0)
         # With ppDevice and ppImmediateContext NULL the call only proves the
         # device could be created and reports the level: S_FALSE (1) on
