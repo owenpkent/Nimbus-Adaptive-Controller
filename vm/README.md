@@ -26,6 +26,7 @@ Nimbus does not manage VMs.
 | 5 | `50-attach-gpu.ps1` | **yes** | no | The partition adapter, the memory-mapped I/O and cache settings, the driver files into the guest's HostDriverStore. `-Verify` runs the in-guest render check: **Gate B, part 2.** |
 | 6 | `60-guest-stream.ps1` | Hyper-V admin | no | Guest phase 2 (virtual display, render check), Moonlight on the host, pairing by PIN through Sunshine's API, the background-gamepad setting. |
 | 7 | `gate_c_host.py` | none | no | **Gate C:** host input sweeps against the guest's counters, 14 buttons in order, stick holds, a held stick through host focus, Stop within 500 ms. `--actuator pad` then `--actuator nimbus`, with `--viewer-title Moonlight` so the sweep runs with the viewer focused. |
+| 8 | `gate_d_latency.py` with `guest/beacon.py` | none | no | **Gate D, the latency axis:** input to photon through the guest (pad in, Moonlight picture out) against the same beacon natively on the host. **It flashes the screen**; see below. |
 
 Everything lives under `C:\NimbusVM` (override with `-VmRoot` or
 `NIMBUS_VM_ROOT`): `iso\`, `disks\`, `logs\` (every gate writes a JSON
@@ -83,6 +84,12 @@ What that changed, and what to keep in mind:
   pointer and keyboard input and focuses the viewer window, the same way
   the game harness takes the machine: run it unattended and leave the mouse
   alone while it runs.
+- **Gate D flashes the screen.** The beacon toggles up to twice a second
+  for the length of a run, and the viewer window is brought to the front of
+  the host desktop, so the flashing is on the host's screen. Nobody should
+  be looking at that screen while it runs, and never anyone photosensitive.
+  The beacon defaults to a 300 px light-gray square and 30 trials for that
+  reason.
 
 ## What the first run found (2026-09-13)
 
@@ -103,6 +110,16 @@ What that changed, and what to keep in mind:
   counts them apart from keyboard input; they are the pad, not a keyboard.
 - Stop with a stick held reads neutral in the guest in 54 to 94 ms through
   the whole chain.
+- Gate D, latency: press of A to the change on the host's screen is one
+  display frame natively (p50 12.8 ms, p95 13.5) and 30 to 46 ms at the
+  median through the guest, 47 to 80 ms at the 95th percentile, up to
+  113 ms worst, over three runs. The guest loses the latency axis; a game
+  in the guest and a second machine were not measured.
+- The guest's primary display is the Hyper-V one at 1024x768; Moonlight
+  pillarboxes it into a 16:9 window with 160 px bars, and the probe
+  position is computed from the beacon's rectangle for that reason.
+- Sunshine's `/api/pin` and the beacon and monitor servers all need Nagle
+  off; with it on, a request from the host costs about 17 ms.
 
 ## Known hazards from the community record
 

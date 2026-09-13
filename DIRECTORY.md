@@ -197,6 +197,7 @@ The scripts behind `docs/vision/VIRTUAL_MACHINE_FEASIBILITY.md`: a Windows 11 gu
 | `50-attach-gpu.ps1` | Elevated: partition adapter, MMIO and cache settings, host driver files into the guest's HostDriverStore; `-Verify` is Gate B part 2 |
 | `60-guest-stream.ps1` | Guest phase 2, Moonlight on the host, pairing by PIN through Sunshine's API |
 | `gate_c_host.py` | Gate C, host side: input sweeps, 14 buttons, stick holds, Stop within 500 ms; `--actuator pad` or `nimbus` |
+| `gate_d_latency.py`, `guest/beacon.py` | Gate D, the latency axis: input to photon through the guest against the host natively; the beacon flashes, so unattended only |
 | `guest/setup.ps1`, `guest/unattend.xml` | The guest's unattended first boot and setup |
 | `guest/gate_c_monitor.py`, `guest/render_check.py` | Guest side: the input counter served over HTTP, and the Direct3D 11 device check |
 | `common.ps1` | Shared names, paths, elevation and credential helpers |

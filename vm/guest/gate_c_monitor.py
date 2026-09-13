@@ -422,6 +422,10 @@ def xinput_loop(stop: threading.Event, poll_hz: int) -> None:
 # ---- HTTP -------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
     server_version = "NimbusGateC/1"
+    # Headers and body leave as two small writes; with Nagle on, the second
+    # waits for the client's delayed ACK and a round trip costs about 17 ms,
+    # which the host's Stop timing would then carry.
+    disable_nagle_algorithm = True
 
     def log_message(self, fmt, *args):   # quiet
         pass
