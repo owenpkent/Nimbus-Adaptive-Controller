@@ -5,8 +5,9 @@ a Windows 11 guest on the dev machine that shares the host's GPU through
 Hyper-V GPU paravirtualization, receives Nimbus's pad through Moonlight and
 Sunshine, and is shown on the host through the same stream. The scripts
 follow the document's gates in order and each one refuses to run before its
-predecessor has passed. Built 2026-09-13; see the document's section 10 for
-what has and has not been exercised.
+predecessor has passed. Built and run through Gate C on 2026-09-13; the
+document's section 10 records what each step met. Gate D, the playability
+comparison, has not been run.
 
 The document's conclusion has not changed: this track exists to answer two
 cheap questions (does the GPU partition at all, do wanted titles start in a
@@ -68,6 +69,26 @@ Copied to `C:\nimbus` on the guest disk by step 4.
   refuses if the filter is registered but unloadable, because that is the
   configuration that boots with no mouse. On 2026-09-13 the filter was not
   installed and test signing was off, so the reboot was safe.
+
+## What the first run found (2026-09-13)
+
+- The answer file's first-logon command runs elevated, and phase 1 of the
+  guest setup finished in 38 seconds.
+- winget's VDD package is the portable control app, nothing installed; the
+  guest setup trusts the driver's signer (SignPath Foundation), stages the
+  driver with pnputil and creates the device with the bundled devcon.
+- Sunshine's 2026 API needs the `pairing_id` of the pending request
+  (`GET /api/pin`) when the PIN is posted, and the JSON body must go through
+  a file from PowerShell 5.1.
+- Moonlight forwards every host gamepad: the host's vJoy device becomes
+  player 0 in the guest as soon as the stream starts, and Nimbus's pad lands
+  in the next slot. `gate_c_host.py` watches for the slot that appears
+  after it plugs its pad.
+- Windows turns a pad into `VK_GAMEPAD_*` key events inside the guest, one
+  per button edge and auto-repeating while a stick is held. The monitor
+  counts them apart from keyboard input; they are the pad, not a keyboard.
+- Stop with a stick held reads neutral in the guest in 54 to 94 ms through
+  the whole chain.
 
 ## Known hazards from the community record
 

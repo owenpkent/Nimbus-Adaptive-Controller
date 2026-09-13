@@ -130,8 +130,11 @@ Write-Host ''
 Write-Host 'Check in Moonlight > Settings > Input: "Process gamepad input when Moonlight is in the background" is ON,'
 Write-Host 'and that no mouse or keyboard capture option is needed (Sunshine ignores both anyway).'
 Write-Host ''
-Write-Host 'Stream the guest desktop (leave it running, then run Gate C from another prompt):'
-Write-Host ("  & '{0}' stream {1} Desktop" -f $moonlight, $ip)
-Write-Host 'Gate C (the pad direct, then the real app):'
-Write-Host ("  venv\Scripts\python.exe vm\gate_c_host.py --guest {0} --actuator pad --json {1}\logs\gate-c-pad.json" -f $ip, $VmRoot)
-Write-Host ("  venv\Scripts\python.exe vm\gate_c_host.py --guest {0} --actuator nimbus --json {1}\logs\gate-c-nimbus.json" -f $ip, $VmRoot)
+Write-Host 'Stream the guest desktop (leave it running, then run Gate C from another prompt). Windowed so Nimbus'
+Write-Host 'can sit beside it, and background gamepad input so the pad keeps flowing while Nimbus has the focus:'
+Write-Host ("  & '{0}' stream {1} Desktop --display-mode windowed --resolution 1280x720 --fps 60 --background-gamepad --no-quit-after" -f $moonlight, $ip)
+Write-Host 'Gate C (the pad direct, then the real app), with the viewer focused for the host input sweep:'
+Write-Host ("  venv\Scripts\python.exe vm\gate_c_host.py --guest {0} --actuator pad --viewer-title Moonlight --json {1}\logs\gate-c-pad.json" -f $ip, $VmRoot)
+Write-Host ("  venv\Scripts\python.exe vm\gate_c_host.py --guest {0} --actuator nimbus --viewer-title Moonlight --json {1}\logs\gate-c-nimbus.json" -f $ip, $VmRoot)
+Write-Host 'Moonlight forwards every host gamepad, so the vJoy device shows up in the guest as player 0 as soon as the'
+Write-Host 'stream starts; gate_c_host.py looks for the slot that appears after it plugs its own pad.'
