@@ -266,6 +266,8 @@ The property that keeps Nimbus on the right side of that line is simple and wort
 
 Everything in sections 4 through 6 satisfies that. Nothing in this document proposes reading the screen, detecting targets, or generating input the user did not command.
 
+A proposal to narrow this line for single-player games only, with the research behind it and the rules it would keep, is [TARGET_AWARE_AIM_PLAN.md](TARGET_AWARE_AIM_PLAN.md) (2026-09-13). It is not adopted; nothing here changes until its section 2 is decided.
+
 ---
 
 ## 11. Order of work
