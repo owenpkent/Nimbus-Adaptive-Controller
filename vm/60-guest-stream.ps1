@@ -105,10 +105,18 @@ if (-not $SkipPair) {
     Start-Sleep -Seconds 4
     $guestUser = $script:GuestAdmin
     $guestPw = (Get-Content (Join-Path $VmRoot 'guest-password.txt') -Raw).Trim()
+    # Sunshine's 2026 API keeps a list of pending pairing requests
+    # (GET /api/pin) and the PIN must be posted with that request's
+    # pairing_id. The JSON goes through a file: PowerShell 5.1 re-quotes a
+    # literal {"pin":...} argument on its way into curl and Sunshine sees '{p'.
     $posted = Invoke-Command -VMName $script:VmName -Credential $cred -ScriptBlock {
         param($u, $p, $pin, $name)
-        $body = "{`"pin`":`"$pin`",`"name`":`"$name`"}"
-        & "$env:SystemRoot\System32\curl.exe" -k -sS -u "${u}:${p}" -X POST 'https://localhost:47990/api/pin' -H 'Content-Type: application/json' -d $body 2>&1 | Out-String
+        $curl = "$env:SystemRoot\System32\curl.exe"
+        $pending = (& $curl -k -sS -u "${u}:${p}" 'https://localhost:47990/api/pin' 2>&1 | Out-String | ConvertFrom-Json).pairings
+        $id = ($pending | Select-Object -Last 1).id
+        if (-not $id) { return 'no pending pairing request in Sunshine (did Moonlight reach it?)' }
+        [IO.File]::WriteAllText('C:\nimbus\pin.json', "{`"pin`":`"$pin`",`"name`":`"$name`",`"pairing_id`":`"$id`"}")
+        & $curl -k -sS -u "${u}:${p}" -X POST 'https://localhost:47990/api/pin' -H 'Content-Type: application/json' -d '@C:\nimbus\pin.json' 2>&1 | Out-String
     } -ArgumentList $guestUser, $guestPw, $Pin, $env:COMPUTERNAME
     Write-Host "  Sunshine: $($posted.Trim())"
     if (-not $pairProc.WaitForExit(60000)) { Write-Warning 'Moonlight pair is still running after 60 s; check its window' }

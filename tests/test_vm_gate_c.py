@@ -200,6 +200,9 @@ m.reset()
 snap = m.snapshot()
 check("reset zeroes counters and drops events, keeps the sequence", snap["counters"]["mouse_input"] == 0 and not snap["events"] and snap["seq"] == 8)
 check("input keys the host judges all exist on the monitor", all(k in snap["counters"] for k in gch.INPUT_KEYS))
+check("pad-derived key counters exist on the monitor", all(k in snap["counters"] for k in gch.GAMEPAD_VK_KEYS))
+check("VK_GAMEPAD_A and the thumbstick keys classify as pad-derived, Shift does not",
+      gcm.is_gamepad_vk(0xC3) and gcm.is_gamepad_vk(0xD5) and gcm.is_gamepad_vk(0xDA) and not gcm.is_gamepad_vk(0x10) and not gcm.is_gamepad_vk(0xDB))
 check("monitor button names match the host's expectations", set(gcm.XINPUT_BUTTON_NAMES.values()) == set(gch.XINPUT_NAME_BY_FLAG.values()))
 
 print(f"\n{PASSES} passed, {FAILS} failed")

@@ -16,7 +16,11 @@ Low-level hooks (``WH_MOUSE_LL`` / ``WH_KEYBOARD_LL``):
     ``ll_mouse`` and ``ll_keyboard``, each split into ``hardware`` and
     ``injected`` (``LLMHF_INJECTED``). A viewer that forwards the pointer
     with ``SendInput`` shows up as injected; the Hyper-V synthetic mouse of a
-    basic vmconnect session shows up as hardware.
+    basic vmconnect session shows up as hardware. Keys in the
+    ``VK_GAMEPAD_*`` range are counted apart (``*_gamepad_vk``): Windows
+    synthesizes them from the pad itself, so they are evidence the pad
+    arrived, not that a keyboard did. Every key is also logged as a
+    ``key`` event with its virtual-key code.
 XInput (polled at ``--poll-hz``):
     per pad slot: connected, packet number, buttons, sticks, triggers, and
     an event list of transitions (connect, button_down, button_up,
@@ -190,9 +194,9 @@ class Monitor:
         with self.lock:
             self.counters = {
                 "mouse_input": 0, "mouse_input_relative": 0, "mouse_input_absolute": 0,
-                "mouse_input_buttons": 0, "keyboard_input": 0, "hid_input": 0,
+                "mouse_input_buttons": 0, "keyboard_input": 0, "keyboard_input_gamepad_vk": 0, "hid_input": 0,
                 "ll_mouse_hardware": 0, "ll_mouse_injected": 0,
-                "ll_keyboard_hardware": 0, "ll_keyboard_injected": 0,
+                "ll_keyboard_hardware": 0, "ll_keyboard_injected": 0, "ll_keyboard_gamepad_vk": 0,
                 "pad_packets": 0,
             }
             self.events = []
@@ -250,7 +254,9 @@ def _wndproc(hwnd, msg, wparam, lparam):
                 if mouse.ulButtons & 0x3FF:
                     MON.bump("mouse_input_buttons")
             elif header.dwType == RIM_TYPEKEYBOARD:
-                MON.bump("keyboard_input")
+                off = ctypes.sizeof(RAWINPUTHEADER)
+                kb = RAWKEYBOARD.from_buffer_copy(buf.raw[off: off + ctypes.sizeof(RAWKEYBOARD)])
+                MON.bump("keyboard_input_gamepad_vk" if is_gamepad_vk(int(kb.VKey)) else "keyboard_input")
             else:
                 MON.bump("hid_input")
         return 0
@@ -267,10 +273,40 @@ def _mouse_hook(n_code, wparam, lparam):
     return user32.CallNextHookEx(None, n_code, wparam, lparam)
 
 
+WM_KEYDOWN = 0x0100
+WM_SYSKEYDOWN = 0x0104
+# VK_GAMEPAD_A (0xC3) through VK_GAMEPAD_RIGHT_THUMBSTICK_LEFT (0xDA): the
+# virtual keys Windows itself synthesizes from an XInput pad for shell and
+# XAML navigation. They arrive as injected keyboard input, one per pad
+# button edge and auto-repeating while a stick is held, and they are the
+# guest's reflection of the pad, not anyone's keyboard. Seen on
+# 2026-09-13: 14 "keyboard" events during a stick hold were all 0xD5.
+VK_GAMEPAD_FIRST = 0xC3
+VK_GAMEPAD_LAST = 0xDA
+
+
+def is_gamepad_vk(vk: int) -> bool:
+    return VK_GAMEPAD_FIRST <= vk <= VK_GAMEPAD_LAST
+
+
+class RAWKEYBOARD(ctypes.Structure):
+    _fields_ = [("MakeCode", wintypes.USHORT), ("Flags", wintypes.USHORT), ("Reserved", wintypes.USHORT),
+                ("VKey", wintypes.USHORT), ("Message", wintypes.UINT), ("ExtraInformation", wintypes.ULONG)]
+
+
 def _keyboard_hook(n_code, wparam, lparam):
     if n_code >= 0:
         info = ctypes.cast(lparam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
-        MON.bump("ll_keyboard_injected" if info.flags & LLKHF_INJECTED else "ll_keyboard_hardware")
+        injected = bool(info.flags & LLKHF_INJECTED)
+        gamepad = is_gamepad_vk(int(info.vkCode))
+        if gamepad:
+            MON.bump("ll_keyboard_gamepad_vk")
+        else:
+            MON.bump("ll_keyboard_injected" if injected else "ll_keyboard_hardware")
+        # Every key that reaches the session is worth naming, because a game
+        # would see exactly these.
+        MON.event("key", vk=int(info.vkCode), scan=int(info.scanCode), injected=injected, gamepad_vk=gamepad,
+                  down=(wparam in (WM_KEYDOWN, WM_SYSKEYDOWN)))
     return user32.CallNextHookEx(None, n_code, wparam, lparam)
 
 

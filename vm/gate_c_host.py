@@ -151,6 +151,84 @@ def host_input_burst() -> Dict[str, int]:
     return {"relative_moves": moves, "cursor_jumps": 40, "clicks": 1, "key_taps": 1}
 
 
+# ---- the viewer window ------------------------------------------------------
+WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+user32.GetForegroundWindow.restype = wintypes.HWND
+user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+user32.IsWindowVisible.argtypes = [wintypes.HWND]
+VK_MENU = 0x12
+
+
+def find_window(title_substring: str) -> int:
+    """First visible top-level window whose title contains the substring, or 0."""
+    found: List[int] = []
+    needle = title_substring.lower()
+
+    def cb(hwnd, _lparam):
+        if user32.IsWindowVisible(hwnd):
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(hwnd, buf, 256)
+            if needle in buf.value.lower():
+                found.append(hwnd)
+                return False
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(cb), 0)
+    return found[0] if found else 0
+
+
+def bring_to_front(hwnd: int) -> bool:
+    """SetForegroundWindow, with the Alt tap that lifts the foreground lock."""
+    for _ in range(4):
+        for flag in (0, KEYEVENTF_KEYUP):
+            inp = INPUT(type=INPUT_KEYBOARD)
+            inp.u.ki = KEYBDINPUT(VK_MENU, 0, flag, 0, None)
+            _send(inp)
+        user32.SetForegroundWindow(hwnd)
+        time.sleep(0.15)
+        if user32.GetForegroundWindow() == hwnd:
+            return True
+    return False
+
+
+def window_title(hwnd: int) -> str:
+    buf = ctypes.create_unicode_buffer(256)
+    user32.GetWindowTextW(hwnd, buf, 256)
+    return buf.value
+
+
+class ViewerFocus:
+    """Puts the viewer (Moonlight) in the foreground for a block, then restores what was there.
+
+    With the viewer focused it captures the host pointer and forwards every
+    move and key to Sunshine, which is the path a leaking configuration
+    would use. Without a title the block runs against whatever is in front.
+    """
+
+    def __init__(self, title: Optional[str]) -> None:
+        self.hwnd = find_window(title) if title else 0
+        self.prev = 0
+        self.focused = False
+
+    def __enter__(self) -> "ViewerFocus":
+        if self.hwnd:
+            self.prev = user32.GetForegroundWindow()
+            self.focused = bring_to_front(self.hwnd)
+            time.sleep(0.3)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self.hwnd and self.prev:
+            bring_to_front(self.prev)
+            time.sleep(0.2)
+
+    def describe(self) -> str:
+        if not self.hwnd:
+            return "viewer not focused (no window asked for or found)"
+        return f"viewer '{window_title(self.hwnd)}' focused={self.focused}"
+
+
 # ---- the guest monitor ------------------------------------------------------
 class GuestMonitor:
     """HTTP client for gate_c_monitor.py."""
@@ -257,40 +335,61 @@ def _counter_delta(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, i
 
 INPUT_KEYS = ("mouse_input", "keyboard_input", "ll_mouse_hardware", "ll_mouse_injected",
               "ll_keyboard_hardware", "ll_keyboard_injected")
+# Reported beside the judged counters, never judged: Windows turns a pad
+# into VK_GAMEPAD_* key events inside the guest, so these rise whenever the
+# pad is used and say nothing about the host's keyboard.
+GAMEPAD_VK_KEYS = ("keyboard_input_gamepad_vk", "ll_keyboard_gamepad_vk")
 
 
-def phase_host_input(mon: GuestMonitor, rep: Report, loopback: bool) -> None:
+def phase_host_input(mon: GuestMonitor, rep: Report, loopback: bool, viewer_title: Optional[str] = None) -> None:
     before = mon.snapshot()
-    sent = host_input_burst()
-    time.sleep(0.4)
-    after = mon.snapshot()
+    with ViewerFocus(viewer_title) as vf:
+        sent = host_input_burst()
+        time.sleep(0.4)
+        after = mon.snapshot()
     d = _counter_delta(before, after)
     seen = {k: d.get(k, 0) for k in INPUT_KEYS}
-    detail = f"host sent {sent}; guest saw {seen}"
+    detail = f"{vf.describe()}; host sent {sent}; guest saw {seen}"
     if loopback:
         rep.add("host_input", "guest input counters (loopback: same machine, not judged)", None, detail)
     else:
         rep.add("host_input", "no guest mouse or keyboard input during host activity", all(v == 0 for v in seen.values()), detail)
 
 
-def phase_pad_present(mon: GuestMonitor, rep: Report) -> Optional[int]:
-    deadline = time.time() + 5.0
+def connected_slots(mon: GuestMonitor) -> List[int]:
+    return sorted(int(k) for k, v in mon.snapshot()["pads"].items() if v.get("connected"))
+
+
+def phase_pad_present(mon: GuestMonitor, rep: Report, known: Tuple[int, ...] = ()) -> Optional[int]:
+    """The slot our pad landed in: one that was not connected before we plugged it.
+
+    A viewer forwards every host gamepad (Moonlight took the host's vJoy
+    device as player 0 on 2026-09-13), so the first connected slot is not
+    necessarily ours.
+    """
+    deadline = time.time() + 8.0
     while time.time() < deadline:
-        pads = mon.snapshot()["pads"]
-        slots = [int(k) for k, v in pads.items() if v.get("connected")]
-        if slots:
-            rep.add("pad_present", "guest sees an XInput pad", True, f"slot(s) {slots}")
-            return slots[0]
+        slots = connected_slots(mon)
+        new = [s for s in slots if s not in known]
+        if new:
+            rep.add("pad_present", "guest sees our XInput pad", True, f"slot {new[0]} (connected slots {slots}, before plug {list(known)})")
+            return new[0]
         time.sleep(0.1)
-    rep.add("pad_present", "guest sees an XInput pad", False, "no connected XInput slot within 5 s")
+    rep.add("pad_present", "guest sees our XInput pad", False,
+            f"no new XInput slot within 8 s (connected {connected_slots(mon)}, before plug {list(known)})")
     return None
 
 
-def _pad_events(mon: GuestMonitor, since: int, kinds: Tuple[str, ...]) -> List[Dict[str, Any]]:
-    return [e for e in mon.snapshot(since)["events"] if e["kind"] in kinds]
+def _on_slot(slot: Optional[int]) -> Callable[[Dict[str, Any]], bool]:
+    return (lambda e: True) if slot is None else (lambda e: e.get("pad") == slot)
 
 
-def phase_buttons(mon: GuestMonitor, rep: Report, act) -> None:
+def _pad_events(mon: GuestMonitor, since: int, kinds: Tuple[str, ...], slot: Optional[int] = None) -> List[Dict[str, Any]]:
+    on = _on_slot(slot)
+    return [e for e in mon.snapshot(since)["events"] if e["kind"] in kinds and on(e)]
+
+
+def phase_buttons(mon: GuestMonitor, rep: Report, act, slot: Optional[int] = None) -> None:
     since = mon.snapshot()["seq"]
     expected: List[Tuple[str, str]] = []
     for bid in range(1, 15):
@@ -301,13 +400,13 @@ def phase_buttons(mon: GuestMonitor, rep: Report, act) -> None:
         time.sleep(0.08)
         expected += [("button_down", name), ("button_up", name)]
     time.sleep(0.3)
-    got = [(e["kind"], e["button"]) for e in _pad_events(mon, since, ("button_down", "button_up"))]
+    got = [(e["kind"], e["button"]) for e in _pad_events(mon, since, ("button_down", "button_up"), slot)]
     ok = got == expected
     detail = f"{len(got)} events" if ok else f"expected {expected}, got {got}"
     rep.add("buttons", "14 buttons arrive once each, in order", ok, detail)
 
 
-def phase_sticks(mon: GuestMonitor, rep: Report, act) -> None:
+def phase_sticks(mon: GuestMonitor, rep: Report, act, slot: Optional[int] = None) -> None:
     since = mon.snapshot()["seq"]
     script = [
         ({"lx": 1.0}, "stick_held", {"stick": "left"}),
@@ -325,7 +424,7 @@ def phase_sticks(mon: GuestMonitor, rep: Report, act) -> None:
     time.sleep(0.3)
     kinds = ("stick_held", "stick_neutral", "trigger_held", "trigger_released")
     got = []
-    for e in _pad_events(mon, since, kinds):
+    for e in _pad_events(mon, since, kinds, slot):
         attrs = {k: e[k] for k in ("stick", "trigger") if k in e}
         got.append((e["kind"], tuple(sorted(attrs.items()))))
     ok = got == expected
@@ -342,49 +441,53 @@ def phase_held_through(mon: GuestMonitor, rep: Report, act, slot: int, loopback:
     time.sleep(0.3)
     after = mon.snapshot(since)
     held1 = after["pads"].get(str(slot), {}).get("left_held", False)
-    dropped = [e for e in after["events"] if e["kind"] in ("stick_neutral", "disconnect")]
+    dropped = [e for e in after["events"] if e["kind"] in ("stick_neutral", "disconnect") and e.get("pad") == slot]
     ok = held0 and held1 and not dropped
     rep.add("held_through", "held left stick survives host mouse and keyboard activity", ok,
             f"held before {held0}, after {held1}, drop events {len(dropped)}")
     d = _counter_delta(snap, after)
     seen = {k: d.get(k, 0) for k in INPUT_KEYS}
+    pad_vk = {k: d.get(k, 0) for k in GAMEPAD_VK_KEYS}
     if loopback:
-        rep.add("held_through", "guest input counters during the sweep (loopback, not judged)", None, f"{seen}")
+        rep.add("held_through", "guest input counters during the sweep (loopback, not judged)", None, f"{seen}; pad-derived keys {pad_vk}")
     else:
-        rep.add("held_through", "no guest input during the sweep", all(v == 0 for v in seen.values()), f"host sent {sent}; guest saw {seen}")
+        rep.add("held_through", "no guest input during the sweep", all(v == 0 for v in seen.values()),
+                f"host sent {sent}; guest saw {seen}; pad-derived VK_GAMEPAD keys (not judged) {pad_vk}")
     act.apply({})
     time.sleep(0.3)
 
 
-def phase_stop_held(mon: GuestMonitor, rep: Report, act) -> None:
+def phase_stop_held(mon: GuestMonitor, rep: Report, act, slot: Optional[int] = None) -> None:
+    on = _on_slot(slot)
     since = mon.snapshot()["seq"]
     act.apply({"lx": 1.0})
-    ev, _ = mon.wait_event(since, lambda e: e["kind"] == "stick_held" and e.get("stick") == "left", 2.0)
+    ev, _ = mon.wait_event(since, lambda e: e["kind"] == "stick_held" and e.get("stick") == "left" and on(e), 2.0)
     if ev is None:
         rep.add("stop_held", "stick held before the stop", False, "guest never reported the left stick held")
         return
     since = ev["seq"]
     t0 = time.perf_counter()
     act.stop()
-    ev2, elapsed = mon.wait_event(since, lambda e: e["kind"] in ("stick_neutral", "disconnect"), 3.0)
+    ev2, elapsed = mon.wait_event(since, lambda e: e["kind"] in ("stick_neutral", "disconnect") and on(e), 3.0)
     elapsed = time.perf_counter() - t0
     ok = ev2 is not None and elapsed <= STOP_LIMIT_S
     rep.add("stop_held", f"stop with a stick held reads neutral within {int(STOP_LIMIT_S * 1000)} ms", ok,
             f"{elapsed * 1000:.0f} ms" + (f" ({ev2['kind']})" if ev2 else " (no neutral or disconnect seen)"))
 
 
-def run_phases(mon: GuestMonitor, rep: Report, act, loopback: bool, skip_host_input: bool) -> None:
+def run_phases(mon: GuestMonitor, rep: Report, act, loopback: bool, skip_host_input: bool,
+               known_slots: Tuple[int, ...] = (), viewer_title: Optional[str] = None) -> None:
     mon.reset()
     if not skip_host_input:
-        phase_host_input(mon, rep, loopback)
-    slot = phase_pad_present(mon, rep)
+        phase_host_input(mon, rep, loopback, viewer_title)
+    slot = phase_pad_present(mon, rep, known_slots)
     if slot is None:
         return
-    phase_buttons(mon, rep, act)
-    phase_sticks(mon, rep, act)
+    phase_buttons(mon, rep, act, slot)
+    phase_sticks(mon, rep, act, slot)
     if not skip_host_input:
         phase_held_through(mon, rep, act, slot, loopback)
-    phase_stop_held(mon, rep, act)
+    phase_stop_held(mon, rep, act, slot)
 
 
 # ---- main -------------------------------------------------------------------
@@ -395,6 +498,7 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--actuator", choices=("pad", "nimbus"), default="pad")
     parser.add_argument("--loopback", action="store_true", help="the monitor runs on this host: tooling check only")
     parser.add_argument("--skip-host-input", action="store_true", help="do not synthesize host mouse or keyboard input")
+    parser.add_argument("--viewer-title", help="title substring of the viewer window (e.g. Moonlight) to focus during the host input sweep")
     parser.add_argument("--json", help="write the report here")
     args = parser.parse_args(argv)
 
@@ -404,11 +508,14 @@ def main(argv: List[str]) -> int:
         return 2
     rep = Report()
     print(f"Gate C against {mon.base}, actuator {args.actuator}{' (loopback)' if args.loopback else ''}")
+    known = tuple(connected_slots(mon))     # pads the guest already has, before ours is plugged
+    if known:
+        print(f"  guest already has XInput slot(s) {list(known)} connected (a viewer forwards every host pad)")
 
     if args.actuator == "pad":
         act = PadDirect()
         try:
-            run_phases(mon, rep, act, args.loopback, args.skip_host_input)
+            run_phases(mon, rep, act, args.loopback, args.skip_host_input, known, args.viewer_title)
         finally:
             act.close()
     else:
@@ -436,7 +543,7 @@ def main(argv: List[str]) -> int:
             if err:
                 rep.add("nimbus", "app ready", False, err)
                 return
-            run_phases(mon, rep, _NimbusStop(act), args.loopback, args.skip_host_input)
+            run_phases(mon, rep, _NimbusStop(act), args.loopback, args.skip_host_input, known, args.viewer_title)
 
         act.run(scenario)
 
