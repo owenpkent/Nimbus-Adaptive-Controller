@@ -140,10 +140,11 @@ try {
     $mounted = $true
     Initialize-Disk -Number $disk.Number -PartitionStyle GPT -PassThru | Out-Null
 
-    # EFI: created as basic data so Format-Volume accepts it, then retyped.
+    # EFI: created as basic data so Format-Volume accepts it and it keeps a
+    # drive letter for bcdboot; retyped to the EFI System Partition GUID at
+    # the end, after everything that needs the letter has run.
     $efi = New-Partition -DiskNumber $disk.Number -Size 260MB -AssignDriveLetter
     $efi | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'System' -Confirm:$false | Out-Null
-    $efi | Set-Partition -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'
     $efi = Get-Partition -DiskNumber $disk.Number -PartitionNumber $efi.PartitionNumber
     New-Partition -DiskNumber $disk.Number -Size 16MB -GptType '{e3c9e316-0b5c-4db8-817d-f92df00215ae}' | Out-Null
     $os = New-Partition -DiskNumber $disk.Number -UseMaximumSize -AssignDriveLetter
@@ -176,6 +177,10 @@ try {
         monitor_port = $script:MonitorPort; created = (Get-Date).ToString('o'); image = $pick.ImageName
     }
     $guestJson | ConvertTo-Json | Set-Content -Path (Join-Path $nimbusDir 'guest.json') -Encoding UTF8
+
+    # Last: make the boot partition an EFI System Partition. Done after
+    # bcdboot and the copies because retyping can drop the drive letter.
+    Set-Partition -DiskNumber $disk.Number -PartitionNumber $efi.PartitionNumber -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'
 } finally {
     if ($mounted) { Dismount-VHD -Path $vhdx -ErrorAction SilentlyContinue }
     Dismount-DiskImage -ImagePath $Iso -ErrorAction SilentlyContinue | Out-Null
