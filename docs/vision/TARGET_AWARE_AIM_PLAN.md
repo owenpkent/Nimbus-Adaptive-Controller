@@ -337,6 +337,31 @@ Phases 1 and 2 can start on this branch. Phase 0's document changes should land 
 
 ---
 
+## 13. Review, 2026-09-13, and the relation to the VM track
+
+Read the same evening, after the guest VM tooling of [VIRTUAL_MACHINE_FEASIBILITY.md](VIRTUAL_MACHINE_FEASIBILITY.md) section 10 had landed and Gate B part 1 had passed on the dev machine. Five comments on the plan, then what the two tracks have to do with each other.
+
+### 13.1 Comments
+
+1. **Phase 1 needs no section 2 decision.** It is harness work: a servo, a `look_at` primitive, and a target published by our own Arma 3 mission. Nothing ships that knows where a target is, and a snap on a button press is the "You direct, the AI executes" model Spectator+ already publishes (README lines 149 to 150). It also answers the one engineering unknown in the plan, whether a rate-controlled stick can be servoed through 100 ms of dead time, and yields "turn to face the door" for voice control whatever is decided later. It can start without touching the README.
+2. **Phase 2 is where the line moves.** Screen capture and a colour detector in the shipped app are the first thing a reader can quote against the non-goal. That decision is better taken with T2 and T3 numbers in hand than now.
+3. **Left 4 Dead 2 is the wrong phase 2 test title.** Its glow outlines are on survivors, so a colour source there aims at allies, and it has Versus and VAC. PowerWash Simulator, which section 12 already names for the shipped list, is the better first target: no anti-cheat, no opponents, already in the harness, and a nozzle onto dirt is the demonstration this audience would actually want. Whether dirt is detectable by colour is the open question, and it is a cheaper one than the survivor glow's per-state behaviour (research item 10).
+4. **The allowlist and the anti-cheat scan are a posture, not an enforcement mechanism.** They are a JSON file and a process list. Their value is that the project can say in one sentence where the feature runs; the README wording should not present them as a guarantee.
+5. **Costs to carry into phase 0.** The schema change in section 8 is a "when to ask" item under `CLAUDE.md`. The capture libraries raise the Python floor to 3.9 or 3.10. And since 2026-09-13 the dev machine runs above a hypervisor (Hyper-V was enabled for the VM track), so phase 1's loop timing is measured on that baseline, the same caveat the mouse filter suites now carry.
+
+Recommendation: approve phase 1 only, as harness and Spectator+ work with no README change, and revisit section 2 when T2 and T3 have numbers.
+
+### 13.2 Relation to the VM track
+
+The two tracks are independent and share one boundary and one toolbox. One thing they do not do for each other needs saying plainly.
+
+- **The guest does not make assist safer.** Running the game in a VM hides the assist process from the game's anti-cheat, and that is worthless: section 4.2 shows detection is behavioural (input timing and patterns, which reach the game identically from a guest) plus decoys drawn into the frame, which a host capturing the stream would engage just the same. The anti-cheats that would care refuse VMs anyway (VM track, Gate A), and section 5 refuses to run assist where any anti-cheat is present. Both tracks end at the same wall from different sides: neither reaches a kernel-anti-cheat title.
+- **Same workload.** Gate A's usable set (Left 4 Dead 2, Half-Life 2, PowerWash Simulator: no anti-cheat, no opponents, in the harness) is the allowlist this plan would ship. A Gate D playability run and a phase 2 assist run would be measured on the same games with the same harness, calibrations and frame tools.
+- **A guest makes assist worse, mechanically.** Assist lives in the host bridge at the shaping seam. With the game in a guest, perception sees only Moonlight's decoded stream: compression smears the outline colours a colour detector keys on, and the encode and decode chain adds tens of milliseconds to a loop budgeted at 60 to 120 ms of dead time, which forces a lower servo gain (section 7.3). Actuation gains the same transport on the pad path. The phase 1 oracle publishes through the clipboard, which the guest's isolation configuration deliberately closes (Enhanced Session Mode off); if the oracle were ever wanted from a guest, the Gate C monitor's HTTP pattern (`vm/guest/gate_c_monitor.py`) is the shape it would take.
+- **Sequencing.** Neither waits on the other. The VM track is parked at the guest build and expected to end in "keep the research, do not integrate". This plan is parked on section 2. They compete only for the machine, since both need it unattended while a game runs.
+
+---
+
 ## Related Documents
 
 - [Target-Aware Aim Research](TARGET_AWARE_AIM_RESEARCH.md): the dossier behind section 4, with the verification ledger
@@ -346,6 +371,7 @@ Phases 1 and 2 can start on this branch. Phase 0's document changes should land 
 - [Host Mode and Input Isolation](HOST_MODE_ISOLATION.md): section 7.6 on the XIM resemblance and the disclosure path
 - [Hardware Integration](HARDWARE_INTEGRATION.md): the "Enable Spectator+ Assist" layer this would be, over a physical device's input
 - [Research Platform](RESEARCH_PLATFORM.md): Spectator+ effectiveness as a research question
+- [Virtual Machine Feasibility](VIRTUAL_MACHINE_FEASIBILITY.md): the guest VM track; section 13.2 above says why a guest neither protects nor helps target-aware assist
 
 ## Sources
 
