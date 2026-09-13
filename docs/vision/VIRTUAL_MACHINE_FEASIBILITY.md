@@ -1,7 +1,7 @@
 # Virtual Machine Feasibility on a Windows Host
 
-**Status:** Research. No VM was created, no GPU was reassigned, and Hyper-V was not enabled on the dev machine.
-**Date:** 2026-09-11, repointed at a Windows host and remeasured 2026-09-12.
+**Status:** Research, with the tooling built. The scripts for every gate are in [`vm/`](../../vm/README.md) and the parts that need no hypervisor have run (section 10). No VM was created, no GPU was reassigned, and Hyper-V was not enabled on the dev machine: that step is elevated and reboots the driver baseline, so it is the handoff.
+**Date:** 2026-09-11, repointed at a Windows host and remeasured 2026-09-12; tooling built and Gate A answered 2026-09-13.
 **Host:** Windows. Nimbus runs on the host exactly as it ships today; the guest runs the game.
 **Question:** On a Windows host, does putting the game in a guest VM buy Nimbus anything it does not already have?
 **Answer in one line:** Almost certainly not, and the two facts that decide it are cheap to check before any VM is built.
@@ -127,6 +127,8 @@ Add an optional `guest_controller` transport behind the existing output abstract
 
 ## 8. Remaining questions
 
+Section 10 answers the first from published policy and turns the second into one command to run after a reboot.
+
 - Does any title that Nimbus users want both need isolation and start inside a Hyper-V guest?
 - Does GPU-PV partition an RX 6600 XT, and does a guest driver initialize against it?
 - What does enabling Hyper-V do to the mouse filter, vJoy and ViGEmBus on the same machine?
@@ -144,3 +146,86 @@ Add an optional `guest_controller` transport behind the existing output abstract
 - [Sunshine configuration](https://docs.lizardbyte.dev/projects/sunshine/master/md_docs_2configuration.html)
 - [ViGEmBus end-of-life statement](https://docs.nefarius.at/projects/ViGEm/End-of-Life/)
 - [Looking Glass requirements](https://looking-glass.io/docs/B7/requirements/), retained only to record that its shared-memory transport has no Hyper-V equivalent
+
+Added 2026-09-13, for section 10:
+
+- [Troubleshooting Hyper-V GPU assignment, partitioning and passthrough, Microsoft Learn](https://learn.microsoft.com/en-us/troubleshoot/windows-server/virtualization/troubleshoot-hyper-v-gpu-assignment-partitioning-passthrough-issues): DDA and GPU-P unsupported on client Windows
+- [Easy-GPU-PV](https://github.com/jamesstringer90/Easy-GPU-PV) (archived 2026-06-01) and its issues [#392](https://github.com/jamesstringer90/Easy-GPU-PV/issues/392) (AMD 24.7 to 24.10 regression), [#265](https://github.com/jamesstringer90/Easy-GPU-PV/issues/265) (Smart Access Memory), [#461](https://github.com/jamesstringer90/Easy-GPU-PV/issues/461) (OpenGL and Vulkan packages); [App Sandbox](https://github.com/jamesstringer90/appsandbox), its successor
+- [Hyper-V GPU Paravirtualization Manager](https://github.com/DanielChrobak/Hyper-V-GPU-Paravirtualization-Manager): the parameter probing the `vm/` scripts copy
+- [Set-VMGpuPartitionAdapter](https://learn.microsoft.com/en-us/powershell/module/hyper-v/set-vmgpupartitionadapter?view=windowsserver2025-ps), [Set-VMKeyProtector](https://learn.microsoft.com/en-us/powershell/module/hyper-v/set-vmkeyprotector), [Enable-VMTPM](https://learn.microsoft.com/en-us/powershell/module/hyper-v/enable-vmtpm), Microsoft Learn
+- [Sunshine v2026.906.222525 release notes](https://github.com/LizardByte/Sunshine/releases/tag/v2026.906.222525) and [configuration](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html); [moonlight-qt SettingsView.qml](https://github.com/moonlight-stream/moonlight-qt/blob/master/app/gui/SettingsView.qml) (the background gamepad setting)
+- [VirtualDrivers/Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver/releases), [nomi-san/parsec-vdd](https://github.com/nomi-san/parsec-vdd)
+- [Fido](https://github.com/pbatard/Fido); [Windows 11 Enterprise evaluation](https://www.microsoft.com/en-us/evalcenter/evaluate-windows-11-enterprise) (registration form, no direct link)
+- [Easy Anti-Cheat interfaces](https://dev.epicgames.com/docs/game-services/anti-cheat/anti-cheat-interfaces) ("does not support virtual machines"); [BattlEye on VMs, 2020](https://x.com/TheBattlEye/status/1289027672186720263); [BattlEye hypervisor detection](https://secret.club/2020/01/12/battleye-hypervisor-detection.html); [Halo MCC anti-cheat disabled mode](https://support.halowaypoint.com/hc/en-us/articles/360037475251); [Riot Vanguard issue 50](https://github.com/RiotVanguard/Vanguard/issues/50)
+
+## 10. Build log, 2026-09-13: the tooling exists, the reboot does not
+
+Asked to build the VM solution on this machine. What stands at the end of the session: every script from the host preflight to the Gate C proof is in [`vm/`](../../vm/README.md), the parts that need no hypervisor have run, and the track is parked at the one step this session could not take. Enabling the Hyper-V role needs an elevated prompt and a reboot; the account the work ran under is a standard user; and section 2's warning about this host being the driver baseline stands. Nothing on the host changed except a new `C:\NimbusVM` holding logs and the install ISO.
+
+### 10.1 The host, re-measured
+
+Section 3 holds. Added: the display driver package GPU-PV copies into a guest is `u0390319.inf_amd64_32d8157dec983dab`, 1,493 MB (AMD Software 23.4.1, driver 31.0.14043.7000). VirtualBox 7.2.8 is installed and will fall back to the Hyper-V API once the role is on. The mouse filter is not installed and test signing is off, so `driver\check-mouse-filter.ps1` reports SAFE and the reboot cannot take the mouse. No reboot is pending. Owen's account is not in Hyper-V Administrators; step 1 adds the console user, after which the VM cmdlets and PowerShell Direct work without elevation. No Windows ISO was on any drive; one is now: `C:\NimbusVM\iso\Win11_25H2_English_x64_v2.iso`, 8.47 GB, retail multi-edition, the same 25H2 as the host, SHA256 recorded in `iso.json`. `vm\00-host-preflight.ps1` says READY.
+
+### 10.2 Gate A, answered from published policy
+
+Gate A asked for a per-title inventory and said the harness could produce one. It did not need to: the answer comes from the vendors' published rules and the community record, and no first-hand Hyper-V report exists for any anti-cheat title. Published policy (P), community report (C), unknown (U).
+
+| Title | Anti-cheat | VM policy | Starts in a Hyper-V guest |
+|---|---|---|---|
+| Left 4 Dead 2, Half-Life 2 | VAC (L4D2), none (HL2 single player) | P: VAC bans modifications, says nothing about VMs | No blocker known |
+| ELDEN RING | Easy Anti-Cheat | P: "does not support virtual machines"; C: refused under KVM until the SMBIOS was hidden. Official offline launch skips EAC | Unknown with EAC; no blocker without |
+| Halo: The Master Chief Collection | Easy Anti-Cheat | Same policy; official "Anti-Cheat Disabled" launch option; C: ran under KVM in 2022 | Unknown with EAC; no blocker without |
+| Arma 3 | BattlEye | P (2020): "countermeasures in several games"; detection is a CPUID timing check. The game starts; BattlEye servers kick | Starts; single player works; server join fails |
+| Total War (Warhammer III, Pharaoh) | None; Denuvo | U; Denuvo limits new machines to five a day | Unknown |
+| EVE Online, No Man's Sky, ACE COMBAT 7, Kerbal Space Program, PowerWash Simulator, Halo Wars DE, Carrier Command 2, Battlefront 2004, Liftoff, DRL Simulator | None | U | Unknown; the two drone simulators need the pad to reach the guest |
+| Riot Vanguard titles | Vanguard | P: unsupported (VAN 9100) | No |
+| FACEIT | FACEIT AC | P: a VM is listed as a cheat | No |
+
+The overall picture for the two anti-cheats that matter: Epic's position is unconditional and enforcement is per title, undocumented, and tightened in late 2025 (a cloud provider reported EAC titles stopping in December with studios unaware). BattlEye does not block launch at all; it kicks at a server. So Gate A passes on its narrow reading: the two Source titles are Raw Input, wanted, and have no blocker, and both EAC titles have official no-anti-cheat modes that remove the question for single player. It does not pass on the reading the argument needs, which is a kernel-anti-cheat title running with its anti-cheat on inside a guest. None is known to. Section 1's comparison stands: the guest's anti-cheat outcome is no better than the filter's and is worse than a second machine's.
+
+### 10.3 What the research changed in sections 2, 5 and 6
+
+- **Easy-GPU-PV is archived** (2026-06-01); the author's successor, App Sandbox, uses Virtual Machine Platform and its own display driver and claims DirectX 12 and Vulkan in the guest. The `vm/` scripts call the Hyper-V cmdlets directly and probe their parameters the way the Paravirtualization Manager does, so they depend on neither project.
+- **Microsoft's stated scope for a GPU-P guest is Direct3D 11 and OpenGL.** DirectX 12 reports are mixed. Elden Ring is a DirectX 12 title, so Gate D should be run on Left 4 Dead 2 or Half-Life 2, which the harness already calibrates.
+- **AMD specifics:** Adrenalin 24.7.1 to 24.10.1 broke hardware encoding in the guest (black screens in Parsec and Sunshine); 24.3.1 and 24.12.1 onward work; this host's 23.4.1 predates the range. Smart Access Memory on the host crashed games in an RX 6800 XT guest, so it goes off before Gate D. Newer AMD drivers split OpenGL and Vulkan into `amdogl` and `amdvlk` packages that the guest also needs; step 5 copies them when present. Guest and host builds must match or the guest blue-screens, which is why the ISO is 25H2.
+- **The transport of section 5 still works, with one change.** Sunshine's 2026 releases moved to a separately licensed virtual HID driver (a paid licence per machine); ViGEmBus remains as an Xbox 360 fallback and is no longer bundled. The guest therefore installs ViGEmBus 1.22.0 itself and pins `gamepad = x360`, with `keyboard` and `mouse` disabled. Moonlight has the setting section 6 asked for: "Process gamepad input when Moonlight is in the background".
+- **The evaluation ISO has no scriptable link** (its download lands on a registration form). Fido asks Microsoft's page for the retail link, and an unactivated Pro guest is the second-licence cost of section 4 made concrete.
+- **A vTPM needs no Host Guardian Service:** `Set-VMKeyProtector -NewLocalKeyProtector` then `Enable-VMTPM`, confirmed on Microsoft Learn.
+
+### 10.4 What was built, and what has run
+
+The runbook is [`vm/README.md`](../../vm/README.md). In order: `00-host-preflight.ps1` (read-only verdict), `10-enable-hyperv.ps1` (elevated; refuses while the mouse filter would not survive the reboot or another reboot is pending), `20-check-gpu-partition.ps1` (Gate B part 1), `30-fetch-iso.ps1`, `40-new-guest.ps1` (the image applied straight onto a VHDX with the answer file and the guest tooling on it, so Windows Setup never runs and the first boot needs no hand on the console; Enhanced Session Mode off), `50-attach-gpu.ps1` (the partition adapter and the host driver files into the guest's HostDriverStore; `-Verify` is Gate B part 2), `60-guest-stream.ps1` (the virtual display, Moonlight, pairing by PIN through Sunshine's API), and the Gate C pair: `guest/gate_c_monitor.py` in the guest counts Raw Input and low-level-hook mouse and keyboard events, hardware and injected apart, and logs every XInput transition; `gate_c_host.py` runs the section 7 script against it with either the pad direct or the real app through the harness's actuator.
+
+Run today, on the host:
+
+| Check | Result |
+|---|---|
+| `00-host-preflight.ps1` | READY; VirtualBox warning; filter SAFE |
+| `guest/render_check.py` on the host | RX 6600 XT creates a Direct3D 11 device at feature level 11_0: the check itself works |
+| Monitor and host driver in loopback (`--guest 127.0.0.1 --loopback --actuator pad`) | 5 of 5 judged checks: 14 buttons as 28 events in order, 6 stick and trigger events in order, a held stick through host input, Stop to neutral in 15 ms. The host's 300 synthesized moves arrived as 183 coalesced Raw Input packets and 302 low-level hook events, all classified injected, which is what a leaking viewer would look like from inside the guest |
+| `tests/test_vm_gate_c.py` (in the fast suite) | 19 checks: a faithful actuator passes; a dropped button, swapped edges and a Stop that leaves the stick held each fail their phase |
+| Every `.ps1` parsed; 10, 40 and 50 refuse unelevated; 20 exits 2 with Hyper-V off | as designed |
+| `30-fetch-iso.ps1` | the 25H2 ISO, hash recorded |
+
+Not run, because each needs the hypervisor: 20 (the real unknown, whether `Get-VMHostPartitionableGpu` lists this adapter on this driver), 40, 50, 60 and Gate C against a guest. Inside those, four things are written from documentation and will meet reality for the first time: whether the answer file's first-logon command runs elevated (the guest setup warns and continues if not), whether winget works under PowerShell Direct for the virtual display driver, whether Sunshine's `/api/pin` still takes basic authentication on the 2026 release, and the name of Moonlight's background-gamepad key in its settings file (the checkbox is the fallback).
+
+### 10.5 The handoff
+
+From an elevated prompt, with nobody depending on the machine for the next ten minutes:
+
+```powershell
+C:\Users\Owen\dev\Nimbus-Adaptive-Controller\vm\10-enable-hyperv.ps1
+Restart-Computer
+```
+
+After the reboot, from a normal prompt in the repo:
+
+```powershell
+vm\20-check-gpu-partition.ps1                      # Gate B part 1; FAIL ends the track
+```
+
+Then, elevated, `vm\40-new-guest.ps1 -Wait` (about twenty minutes, unattended), `vm\50-attach-gpu.ps1 -Verify` (Gate B part 2), and from a normal prompt `vm\60-guest-stream.ps1`, which prints the two `gate_c_host.py` commands. Re-run the mouse filter suites before trusting any driver number measured after the role is on, and expect VirtualBox to be slower. `vm\10-enable-hyperv.ps1 -Disable` and a reboot put the host back.
+
+### 10.6 The decision, unchanged
+
+The tooling makes the two cheap gates one reboot away and the expensive ones a day each; it does not move the conclusion of section 1. Gate A found a workload but not the one that would justify a guest, and every fact the research added (unsupported on client, DirectX 11 only officially, an AMD driver window that breaks it, a paid pad driver in the guest, a second licence) is a cost on the guest's side of the ledger.
