@@ -143,12 +143,25 @@ def host_key_tap() -> None:
         time.sleep(0.03)
 
 
-def host_input_burst() -> Dict[str, int]:
+def host_input_burst(click: bool = True) -> Dict[str, int]:
     moves = host_mouse_sweep()
     host_cursor_jumps()
-    host_click()
+    if click:
+        host_click()
     host_key_tap()
-    return {"relative_moves": moves, "cursor_jumps": 40, "clicks": 1, "key_taps": 1}
+    return {"relative_moves": moves, "cursor_jumps": 40, "clicks": int(click), "key_taps": 1}
+
+
+def park_cursor_over(hwnd: int) -> bool:
+    """Put the host cursor at the centre of a window, so a sweep starts away from Nimbus's widgets."""
+    if not hwnd:
+        return False
+    r = wintypes.RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(r)):
+        return False
+    user32.SetCursorPos((r.left + r.right) // 2, (r.top + r.bottom) // 2)
+    time.sleep(0.05)
+    return True
 
 
 # ---- the viewer window ------------------------------------------------------
@@ -413,9 +426,14 @@ def phase_sticks(mon: GuestMonitor, rep: Report, act, slot: Optional[int] = None
         ({}, "stick_neutral", {"stick": "left"}),
         ({"ry": 1.0}, "stick_held", {"stick": "right"}),
         ({}, "stick_neutral", {"stick": "right"}),
-        ({"lt": 1.0}, "trigger_held", {"trigger": "left"}),
-        ({}, "trigger_released", {"trigger": "left"}),
     ]
+    if getattr(act, "supports_triggers", True):
+        script += [
+            ({"lt": 1.0}, "trigger_held", {"trigger": "left"}),
+            ({}, "trigger_released", {"trigger": "left"}),
+        ]
+    else:
+        rep.add("sticks", "trigger hold", None, "skipped: this actuator drives no trigger (the bundled profile has no trigger widget)")
     expected = []
     for action, kind, attrs in script:
         act.apply(action)
@@ -431,13 +449,24 @@ def phase_sticks(mon: GuestMonitor, rep: Report, act, slot: Optional[int] = None
     rep.add("sticks", "stick and trigger holds arrive in order", ok, f"{len(got)} events" if ok else f"expected {expected}, got {got}")
 
 
-def phase_held_through(mon: GuestMonitor, rep: Report, act, slot: int, loopback: bool) -> None:
+def phase_held_through(mon: GuestMonitor, rep: Report, act, slot: int, loopback: bool,
+                       viewer_title: Optional[str] = None) -> None:
+    """A held stick through host mouse and keyboard activity with the viewer in the background.
+
+    The sweep starts with the cursor over the viewer's window and sends no
+    click: with the real app holding the stick through a synthesized press
+    on its widget, a real click on that widget is a legitimate release, and
+    a sweep that starts on the Nimbus window would be the user letting go,
+    not a leak. The click's path is covered by phase_host_input.
+    """
     act.apply({"lx": 0.9})
     time.sleep(0.3)
     snap = mon.snapshot()
     held0 = snap["pads"].get(str(slot), {}).get("left_held", False)
     since = snap["seq"]
-    sent = host_input_burst()
+    parked = park_cursor_over(find_window(viewer_title) if viewer_title else 0)
+    sent = host_input_burst(click=False)
+    sent["cursor_parked_over_viewer"] = parked
     time.sleep(0.3)
     after = mon.snapshot(since)
     held1 = after["pads"].get(str(slot), {}).get("left_held", False)
@@ -486,7 +515,7 @@ def run_phases(mon: GuestMonitor, rep: Report, act, loopback: bool, skip_host_in
     phase_buttons(mon, rep, act, slot)
     phase_sticks(mon, rep, act, slot)
     if not skip_host_input:
-        phase_held_through(mon, rep, act, slot, loopback)
+        phase_held_through(mon, rep, act, slot, loopback, viewer_title)
     phase_stop_held(mon, rep, act, slot)
 
 
@@ -524,6 +553,8 @@ def main(argv: List[str]) -> int:
 
         class _NimbusStop:
             """The harness actuator with a stop(): release everything, which is what the app's Stop sends."""
+
+            supports_triggers = False     # NimbusActuator.apply drives sticks and buttons only
 
             def __init__(self, inner) -> None:
                 self.inner = inner
