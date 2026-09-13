@@ -38,10 +38,13 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 Vec = Tuple[float, float]
 
 #: ``tgt=`` payload on the Arma 3 mission's pose line: screen x and y as
-#: fractions of the client area, the box width and height as fractions, the
+#: fractions of the screen, the box width and height as fractions, the
 #: bearing and elevation from the camera's own direction in degrees, and the
-#: range in metres. ``tgt=none`` when nothing is placed or it is off screen.
-SCRIPT_TARGET_RE = re.compile(r"tgt=(?:none|([-\d.e+]+),([-\d.e+]+),([-\d.e+]+),([-\d.e+]+),"
+#: range in metres. ``tgt=none`` when nothing is placed, and ``tgt=off,...``
+#: when something is placed that the engine will not draw: both are a frame
+#: with no targets here, because nothing may steer onto a target the user
+#: cannot see.
+SCRIPT_TARGET_RE = re.compile(r"tgt=(?:none|off\S*|([-\d.e+]+),([-\d.e+]+),([-\d.e+]+),([-\d.e+]+),"
                               r"([-\d.e+]+),([-\d.e+]+),([-\d.e+]+))")
 SCRIPT_TICK_RE = re.compile(r"NIMBUS_POSE t=([-\d.e+]+)")
 

@@ -9,7 +9,8 @@ What is checked:
 - a pose line with a target parses into pixels, and the screen fractions
   are scaled by the client area the harness measured
 - ``tgt=none`` is a frame with no targets, which is how the loop learns the
-  target is gone rather than merely late
+  target is gone rather than merely late, and so is ``tgt=off,...``, which is
+  the mission saying a target is placed where the engine will not draw it
 - a line whose tick has not advanced is the same frame, and keeps its own
   capture time, so ``age`` means what it says
 - a line that is not ours (someone else used the clipboard) leaves the last
@@ -92,11 +93,16 @@ again = source.poll()
 check("the same tick is the same frame, with its original capture time", again is empty)
 time.sleep(0.06)
 check("so it ages", again.age() >= 0.05, f"{again.age() * 1000:.0f} ms old")
+channel.text = pose_line(103.0, "off,-31.2,-18.4,30.0")
+gone = source.poll()
+check("a target the engine will not draw is a frame with no targets, not a missing frame",
+      gone is not None and gone is not empty and gone.targets == (),
+      "placed but off screen: nothing may steer onto a target the user cannot see")
 channel.text = "some other application's clipboard"
 foreign = source.poll()
-check("a line that is not ours leaves the last frame standing", foreign is empty)
+check("a line that is not ours leaves the last frame standing", foreign is gone)
 channel.text = ""
-check("and so does an empty channel", source.poll() is empty)
+check("and so does an empty channel", source.poll() is gone)
 
 
 class Unreadable:
@@ -106,7 +112,7 @@ class Unreadable:
 
 unread = ScriptTargetSource(Unreadable(), (WIDTH, HEIGHT))
 check("a channel that cannot be read at all has no frame yet", unread.poll() is None)
-check("the source counts what it read", source.reads >= 4 and source.frames == 2,
+check("the source counts what it read", source.reads >= 4 and source.frames == 3,
       f"{source.reads} reads, {source.frames} frames")
 
 print("A crosshair the game does not put in the middle")

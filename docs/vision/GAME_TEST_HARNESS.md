@@ -206,6 +206,20 @@ then the Spectator+ primitives (section 4.7) through the bridge's own runner, me
 | P4 walk | walk 100 units: the horizontal travel is within 20 percent or 10 units |
 | P5 stop | a 400-unit walk cut short after 0.3 s: the bridge reads zero on the stick and the player stays put for the next second |
 
+and, with `--assist`, the closed loop (section 4.8) against a recipe whose oracle publishes targets, which for now is Arma 3 alone:
+
+| Check | Pass rule |
+|---|---|
+| T0 gate | `src/spectator/policy.py` refuses this title to the app (it is a harness entry), refuses it outright when an anti-cheat process is in the list, and allows it to the harness only when none is. A run of the BattlEye recipe stops here, which is the control |
+| T1 geometry | a) the focal length in pixels from four sightings of a target at known bearings agrees with itself within 5 percent; b) it agrees within 15 percent with a small calibrated turn measured by phase correlation; c) the loop's own dead time, from a stick command to the view moving, is measured and recorded, and the servo is told 1.4 times it; d) the vertical scale is measured against the horizontal rather than assumed equal |
+| T2 snap | a target 5, 15 and 30 degrees off centre: the error arrives inside the budget (600 ms, 1200 for the 30 degree case, which is wider than any shipped tier would engage), stays there, ends within a degree or the servo's own floor, and never overshoots by more than 2 degrees |
+| T3 walking | the same onto a unit walking across at 1 and 2 m/s at 20 m, with the velocity lead and without; the lead has to close a standing error the proportional term alone would leave, where that error is large enough for the servo to resolve at all |
+| T4 silence | a target on screen, nothing asked for: the bridge sends exactly zero on both axes for a second and a half and the view does not move |
+| T5 the user | a 10 px drag on the user's own stick during a snap: the primitive stops, and what the driver holds is the bridge's own value for that drag, not the loop's last command |
+| T6 loss | the unit is deleted mid-snap: the command decays to zero and the primitive ends uncompleted, inside the 250 ms the fail-safe rule allows |
+| T7 kill switch | the path Ctrl+Alt+F12 takes (`stopControllerMode`) releases the axes within a tick |
+| T8 ceiling | with the servo capped below the widget's own ceiling, nothing it commands exceeds the cap |
+
 Each check prints one line and lands in `tests/probe_frames/harness_<game>_<actuator>.json` with every observation. Frames are saved beside it.
 
 ### 4.7 Spectator+ v0: scripted primitives
@@ -217,7 +231,21 @@ Built the same day as the harness, as the first Spectator+ feature a user could 
 
 The bridge owns the runner through `get_spectator()`, created on first use and bound to `setAxis` and `setButton`, so a primitive's output goes through the active driver interface and its limits. It bypasses the widget shaping on purpose: the shaping is for the user's own hand, and "turn 90 degrees" has to be the same turn whatever curve the user has on their stick. A profile switch and the Ctrl+Alt+F12 stop also cancel a running primitive.
 
-What is not there yet: a way to trigger a primitive from the UI or from voice (the concept document's command palette), a closed loop (the runner cannot read the game, so it trusts the calibration; the harness measures how far that trust goes, section 8), and calibrations for any game but Left 4 Dead 2. The environment stays in `tests/` until the app has a consumer for it.
+What is not there yet: a way to trigger a primitive from the UI or from voice (the concept document's command palette), and calibrations for any game the harness has not run. The environment stays in `tests/` until the app has a consumer for it.
+
+### 4.8 Spectator+ v1: the closed loop
+
+Built 2026-09-13 as phase 1 of [TARGET_AWARE_AIM_PLAN.md](TARGET_AWARE_AIM_PLAN.md), which is the same step this section called "a closed loop" and left open. Four pieces, all in `src/spectator/`:
+
+- **`servo.py`.** The control law: angular error in pixels in, stick magnitudes out, through the calibration `calibration.py` already holds. Its design and the two things a simulation forced into it (a plant model to cancel the dead time, and a target-rate estimate that does not read the camera's own motion as the target's) are in the plan's section 7.3. `tests/test_assist_servo.py` runs it against a simulated plant built from the real Arma 3 calibration, which is where those two failures showed up.
+- **`targets.py`.** `TargetFrame`, `Target`, and the sources that produce them. `ScriptTargetSource` parses a channel someone else owns, which for Arma 3 is the mission's own pose line: the harness passes it `clipboard_read`, and the mission now publishes the target's head through `worldToScreen` on every line. The ground truth the same line carries (the target's true bearing, elevation and range) rides in `TargetFrame.extra` and nothing in the control path reads it, so the loop steers by pixels exactly as a detector would make it, and the harness scores it in degrees.
+- **`PrimitiveRunner.look_at`.** The closed-loop primitive beside `turn`, `walk` and `press`: each tick it reads the newest frame, picks a target, asks the servo, writes rx and ry, and ends on settle, on timeout, on the target being lost, or on the user's own stick moving. Bounded in time, always releasing, and it produces nothing without a command.
+- **The bridge.** `get_spectator()` is a `@Slot` now, and `setStickInput` tells a running closed-loop primitive where the user's own stick is, before it drives the stick itself, so a drag cancels the snap and the driver is left holding the user's vector rather than the loop's last command.
+
+The harness runs it behind `--assist` as the T series (section 4.6 lists the checks; section 8 has the numbers). Two things the first runs taught, both now in the checks:
+
+- **A game's screen coordinates are not always the client rectangle.** Arma 3's `worldToScreen` returns y in a 4:3 span (`width * 0.75`), not the window height, so a source that scaled by the client height under-read every vertical error by a quarter. T1d measures the vertical scale against the horizontal rather than assuming they share one, and the source is built with what it measured.
+- **`front()` turns the view in pitch as well as yaw.** The cursor warp it does is a mouse movement to a game that reads the mouse for look, so a check that fronts the window and then places a target 5 degrees off is really asking for a 20 degree correction in pitch. Every assist case now levels the view after fronting it, with the `level_pitch` helper the Arma recipe already needed.
 
 ---
 
@@ -600,6 +628,39 @@ The BattlEye title of `PAD_BUS_FORK_PLAN.md` section 13, and the first game with
 Nimbus on the BattlEye recipe: full drag +240.3 deg/s at the bridge's 0.95 ceiling (the game's response is steeper past 0.95, which is why the pad's full stick reads 305), the 1 px drag sends the 0.289 floor and the camera stays still (`floor_moves_camera` false: the game's threshold is above the floor, like Half-Life 2 and Halo Wars), the A widget echoes `Action` in 47 ms, a full drag up walks 3.9 m in the second, and the primitives: turn right 90 got 88.4, turn left 45 got -45.5, turn right 10 got 10.1, walk 100 m got 99.3 in 19.7 s, and a cut-short walk stopped in 1.4 m.
 
 So under BattlEye a stock ViGEmBus pad is indistinguishable from no BattlEye, in single player, on every number the harness measures: the anti-cheat neither blocks the virtual pad nor changes what it does. That is the baseline a fork of the bus has to match, and it says nothing yet about a server join, where BattlEye's kicks happen; that remains a manual step. What the day cost, all recorded in section 4.3 and the recipe keys: the pad is disabled in the profile until enabled (a scheme name from the game's config), the profile's start-up window is not the game window, a resize while loading hangs the game, Start freezes the mission's script, `eyeDirection` does not follow the aim's pitch, nothing in SQF sets that pitch (so the actuator levels it), and a joystick entry with a missing `mode` (a hand edit's doing) brings up a modal box that stalled one run for three minutes. The clipboard channel is the one part that needs the machine left alone in a new way: a copy during a run interrupts it for a read, and the tests take the foreground and press Escape, so the "leave the mouse and keyboard alone" rule covers copy and paste here too.
+
+### 2026-09-13, dev machine, Arma 3 without BattlEye, the generated VR mission with a target in it, 1280x720 borderless, Nimbus actuator, `--assist`
+
+Phase 1 of [TARGET_AWARE_AIM_PLAN.md](TARGET_AWARE_AIM_PLAN.md): the closed loop, measured against the game's own script rather than its picture. The mission now places a target with `NIMBUS_SPAWN` at a bearing off where the player is looking and publishes its head through `worldToScreen` on every pose line; `src/spectator` steers by those pixels and the harness scores the result in degrees from the same line's bearing, which the control path never reads. All nineteen T checks passed; the run's two failures are P1 and P2, which read "no pose" when the clipboard channel missed, and are the fragility this game's oracle has always had.
+
+The table is the last run. Where a figure moved across the last three runs the range is given, and the spread is the game's frame timing and the 50 Hz pose channel, not the loop.
+
+| Measure | Result |
+|---|---|
+| Focal length, four sightings at known bearings | 1004 px per radian, 17.5 px per degree at the centre, a 65 degree field of view across 1280 px, the four agreeing to 0.0 percent, run after run |
+| The loop's own dead time | 15 to 31 ms, command to the view moving; the servo is told 50 ms |
+| Snap, target 5 degrees off | arrived 188 ms (188 to 234), left 0.10 degrees off, no overshoot |
+| Snap, 15 degrees | arrived 328 ms (265 to 328), left 0.36 degrees, no overshoot |
+| Snap, 30 degrees | arrived 344 ms (344 to 422), left 0.24 degrees, no overshoot |
+| Snap onto a unit walking 1 m/s across at 20 m | arrived 265 ms, left 0.14 degrees, no overshoot |
+| Snap onto one walking 2 m/s | arrived 234 ms, left 0.66 degrees, 0.73 of overshoot |
+| A target on screen, nothing asked for | 0.0000 on both axes for 1.5 s, the view still |
+| A 10 px drag on the user's own stick mid-snap | the primitive stops and the driver holds RX +0.327, which is the bridge's own value for that drag |
+| The unit deleted mid-snap | the command decayed to zero and the primitive ended uncompleted 172 ms later (172 to 203) |
+| Ctrl+Alt+F12's path | axes released inside a tick |
+| The servo capped at 0.50 | nothing it sent exceeded 0.500, and at that cap the game turns at 20 degrees a second, so the 30 degree snap it was given deliberately does not finish |
+
+Five things the runs taught, all of them now in the checks or the code:
+
+- **The dead time is nothing like the budget, because a script oracle is not a rendered frame.** The plan assembled 60 to 120 ms from capture, inference, the pad's poll and the display chain. Here the loop reads the game's own state 50 times a second over the clipboard and sees a command land in 15 ms, which is at the resolution of the measurement (the 0.5 degree threshold is 14 ms of turning by itself). That is a floor, not a forecast: phase 2's capture path will meet the plan's figure. It matters because the gain is the dead time, so the servo told 80 ms took 640 ms to settle a 15 degree snap and the same servo told 50 ms took 265.
+- **A game's screen coordinates are not always the client rectangle.** Arma 3's `worldToScreen` returns y over a 4:3 span (`width * 0.75`, 959 px in a 720 px frame), so a source that scaled by the window height under-read every vertical error by a quarter. T1d measures the vertical scale against the horizontal instead of assuming they share one.
+- **`front()` turns the view, and this game's pose cannot see it.** The cursor warp is a mouse movement to a game that reads the mouse for look. Worse, `getCameraViewDirection` does not follow the aim's pitch here, so `level_pitch` reads zero however far the view is tilted and does nothing: the first runs measured a "5 degree" snap that was really 20 degrees of pitch error, and later ones could not find the target at all because it was off the bottom of the screen. The mission now reports a placed-but-undrawn target as `tgt=off,<bearing>,<elevation>,<range>` rather than as nothing, and the harness pitches by that elevation until the engine draws it. The source treats both `none` and `off` as a frame with no targets, because nothing may steer onto a target the user cannot see.
+- **Phase correlation cannot confirm the geometry on this map.** The VR ground is a grid, and a turn of any size reads as its own shift modulo the texture's period: a 21 degree turn came back as 42 px instead of 363. The cross-check now uses the smallest turn the game will make and records that the oracle's figure stands when no believable shift is found, which is what happens here. The harness's own limits section already carried this trap for Left 4 Dead 2's wallpaper.
+- **Two checks were asking for things the game cannot resolve.** The servo stops commanding below `min_rate / Kp` degrees, which is this game's stick deadzone over the gain (0.34 degrees at the dead time it is told), so a "settled within 1 degree" gate has to be read against that floor, and a comparison between two runs that differ by less than one command is not a comparison. The velocity lead is the second: at 1 and 2 m/s across at 20 m, with the loop's real delay at 15 ms, turning the lead off changes the result by less than the floor. The lead earns its place where the delay is real, which is the simulation (0.36 degrees against 1.33 at 6 degrees a second through 100 ms of dead time) and phase 2's capture path.
+
+The BattlEye recipe is not the same run, and was run anyway: `--game arma3 --actuator nimbus --assist`, 22/22. `src/spectator/policy.py` refuses target-aware assistance whenever an anti-cheat process is present, so with BattlEye's service up the T0 gate refuses three times over (the title is a harness entry, an anti-cheat is running, and the harness's own entry is refused for the same reason), the runner prints that this is the control, and nothing target-aware executes at all. That refusal *is* the control here: it is section 5's rule rather than a measurement, and it is what the plan's exit criterion for this phase becomes once the rule exists. The N and P series ran the same as ever beside it, so the pad-level comparison with and without BattlEye stands from 2026-09-09 and is unchanged by any of this.
+
+One flake worth recording: one run in six died in `env.step`'s screen grab with "the Qt thread did not answer in time", before any assist check ran. Nothing in this work touches that path; `grabWindow` needs the Qt thread and the game had it.
 
 ## Related Documents
 

@@ -837,47 +837,117 @@ def assist_snap(env: GameEnv, act: NimbusActuator, runner, servo, cfg: Dict[str,
     """Run one ``look_at`` through the bridge's own runner and score it."""
     from game_harness import clipboard_read
     from src.spectator.targets import ScriptTargetSource, TargetSelector
-    source = ScriptTargetSource(lambda: clipboard_read(tries=3), (env.w, env.h))
+    height = env.h * env.assist_y_span
+    source = ScriptTargetSource(lambda: clipboard_read(tries=3), (env.w, height),
+                                crosshair=(env.w / 2.0, height / 2.0))
     selector = TargetSelector(fov_px=float(env.w))
     settle_px = abs(servo.px_from_deg(settle_deg))
+    dwell = float(cfg.get("settle_ms", 120.0))
     started = time.monotonic()
-    plan = on_qt(lambda: runner.look_at(source, servo, max_hold=max_hold, settle_px=settle_px,
-                                        settle_ms=float(cfg.get("settle_ms", 120.0)),
+    plan = on_qt(lambda: runner.look_at(source, servo, max_hold=max_hold + dwell / 1000.0 + 0.2,
+                                        settle_px=settle_px, settle_ms=dwell,
                                         cancel_px=float(cfg.get("cancel_px", 6.0)),
                                         selector=selector))
-    out: Dict[str, Any] = {"plan": plan, "started": started, "runner": runner, "servo": servo}
+    out: Dict[str, Any] = {"plan": plan, "started": started, "runner": runner, "servo": servo,
+                           "settle_px": settle_px, "budget": max_hold}
     if plan is None:
-        out.update({"elapsed": 0.0, "look": {}, "overshoot": None})
+        out.update({"elapsed": 0.0, "look": {}, "overshoot": None, "settled_at": None})
         return out
     if wait:
-        deadline = started + max_hold + 2.0
+        deadline = started + max_hold + dwell / 1000.0 + 2.5
         while on_qt(lambda: runner.busy) and time.monotonic() < deadline:
             time.sleep(0.01)
-        out.update(assist_result(env, runner, started))
+        out.update(assist_result(env, runner, started, settle_px))
     return out
 
 
-def assist_result(env: GameEnv, runner, started: float) -> Dict[str, Any]:
-    """What a finished ``look_at`` did: how long, why it ended, how far past."""
+def assist_keep(env: GameEnv, label: str, res: Dict[str, Any], before: Optional[Dict[str, float]],
+                after: Optional[Dict[str, float]]) -> None:
+    """Keep a closed-loop run in the results file, trace and all."""
+    servo = res.get("servo")
+    env.assist_runs.append({"check": label, "reason": res.get("reason"), "settled": res.get("settled"),
+                            "elapsed_ms": round(res.get("elapsed", 0.0) * 1000, 1),
+                            "overshoot_deg": res.get("overshoot"),
+                            "before": before, "after": after,
+                            "kp": round(servo.kp, 3) if servo else None,
+                            "floor_deg": round(servo.settle_floor_deg, 3) if servo else None,
+                            "ceiling": round(servo.ceiling, 3) if servo else None,
+                            "lead": bool(servo.lead) if servo else None,
+                            "samples": (res.get("look") or {}).get("samples")})
+
+
+def assist_result(env: GameEnv, runner, started: float, settle_px: float = 0.0) -> Dict[str, Any]:
+    """What a finished ``look_at`` did: when it arrived, why it ended, how far past.
+
+    ``settled_at`` is the tick after which the error never left the
+    tolerance again, which is what settling means. The primitive itself runs
+    on for the dwell that confirms it, so its own elapsed time is always
+    that much longer and is not the number to gate on.
+    """
     look = on_qt(lambda: dict(runner.last_look))
     samples = [s for s in (look.get("samples") or []) if "deg_x" in s]
     over = None
+    settled_at = None
     if samples:
         sign = 1.0 if samples[0]["deg_x"] >= 0 else -1.0
         over = max(0.0, max(-sign * float(s["deg_x"]) for s in samples))
-    return {"elapsed": time.monotonic() - started, "look": look, "overshoot": over,
+        for sample in samples:
+            inside = math.hypot(float(sample.get("ex", 0.0)), float(sample.get("ey", 0.0))) <= settle_px
+            if not inside:
+                settled_at = None
+            elif settled_at is None:
+                settled_at = float(sample["t"])
+    return {"elapsed": time.monotonic() - started, "look": look, "overshoot": over, "settled_at": settled_at,
             "reason": look.get("reason"), "settled": bool(look.get("settled"))}
 
 
 def assist_note(res: Dict[str, Any], target: Optional[Dict[str, float]]) -> str:
     look = res.get("look") or {}
-    bits = [f"{res.get('reason')} after {res.get('elapsed', 0.0) * 1000:.0f} ms",
+    arrived = res.get("settled_at")
+    bits = [(f"arrived at {arrived * 1000:.0f} ms, " if arrived is not None else "never arrived, ")
+            + f"{res.get('reason')} at {res.get('elapsed', 0.0) * 1000:.0f} ms",
             f"{look.get('ticks', 0)} ticks, {look.get('frames', 0)} with a target"]
     if res.get("overshoot") is not None:
         bits.append(f"overshoot {res['overshoot']:.2f} deg")
     if target:
         bits.append(f"left {target['bearing']:+.2f} deg off, {target['elevation']:+.2f} in pitch")
     return "; ".join(bits)
+
+
+def assist_place(env: GameEnv, act: NimbusActuator, oracle, bearing: float, range_m: float,
+                 tries: int = 4) -> bool:
+    """Foreground the game, put a target at that bearing, and get it on screen.
+
+    Two things make the last part necessary. ``front()`` warps the cursor to
+    the middle of the window, and a game that reads the mouse for look takes
+    that as a turn in pitch as well as yaw. And on Arma 3 the pose's own
+    pitch field does not follow the aim, so ``level_pitch`` reads zero and
+    does nothing however far the view is tilted: the first run of these
+    checks measured a "5 degree" snap that was really 20 degrees of pitch
+    error, and later ones could not find the target at all. The target
+    itself is the reference that works, because the mission publishes its
+    elevation whether or not the engine draws it.
+    """
+    env.front()
+    time.sleep(0.2)
+    if not oracle.spawn_target(bearing, range_m):
+        return False
+    rate = float(env.recipe.get("pitch_rate_deg_per_s", 25.0))
+    for _ in range(tries):
+        seen = oracle.target()
+        if not seen:
+            return False
+        if seen.get("visible"):
+            return True
+        elevation = float(seen.get("elevation") or 0.0)
+        if abs(elevation) < 1.0:
+            return False     # not the pitch keeping it off screen, so nothing here will fix it
+        act.apply({"ry": 0.6 if elevation > 0 else -0.6})
+        time.sleep(max(0.05, min(1.5, abs(elevation) / rate)))
+        act.release()
+        time.sleep(0.3)
+    seen = oracle.target()
+    return bool(seen and seen.get("visible"))
 
 
 def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -> None:
@@ -950,8 +1020,14 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
     record("T1a px/deg: the oracle's own sightings agree on one focal length", spread <= 0.05,
            f"{focal:.0f} px per radian, {abs(focal) * math.pi / 180.0:.1f} px per degree at the centre, "
            f"a {fov_deg(env.w, focal):.1f} degree field of view across {env.w} px, spread {spread * 100:.1f}%")
+    # A small turn on purpose: phase correlation finds the shift modulo any
+    # repeating texture's period, and a big turn across Arma's gridded VR
+    # ground reads as a fraction of itself (measured: a 21 degree turn came
+    # back as 42 px instead of 363). The smallest magnitude the game moves
+    # at, held long enough to clear the frame tools' 10 px threshold, is the
+    # turn least likely to be aliased.
     env.front()
-    r = env.step({"rx": 0.6}, 0.4, "assist_px_per_deg")
+    r = env.step({"rx": 0.4}, 0.4, "assist_px_per_deg")
     env.reset()
     peak = moving_peak(r.get("motion"), env.thresholds)
     if peak is None or not r.get("d_yaw"):
@@ -960,9 +1036,9 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
     else:
         frames = abs(float(peak["dx"])) / abs(math.tan(math.radians(float(r["d_yaw"]))))
         off = abs(frames - focal) / abs(focal)
-        record("T1b px/deg: the frames agree with the oracle within 10 percent", off <= 0.10,
-               f"{frames:.0f} px per radian from a {r['d_yaw']:+.1f} degree turn measured by phase correlation, "
-               f"against {focal:.0f} from the oracle, {off * 100:.1f}% apart")
+        record("T1b px/deg: the frames agree with the oracle within 15 percent", off <= 0.15,
+               f"{frames:.0f} px per radian from a {r['d_yaw']:+.2f} degree turn ({abs(float(peak['dx'])):.0f} px "
+               f"by phase correlation), against {focal:.0f} from the oracle, {off * 100:.1f}% apart")
     env.front()
     time.sleep(0.2)
     if oracle.spawn_target(0.0, range_m):
@@ -975,10 +1051,17 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
         if before_pitch and after_pitch:
             d_el = after_pitch["elevation"] - before_pitch["elevation"]
             d_sy = after_pitch["sy"] - before_pitch["sy"]
-            record("T1d geometry: the screen's y axis runs down, which is what the target source assumes",
-                   abs(d_el) > 1.0 and d_el * d_sy < 0,
+            flat = abs(d_sy * env.h / math.tan(math.radians(abs(d_el)))) if abs(d_el) > 0.2 else 0.0
+            if flat > 0:
+                env.assist_y_span = focal / flat
+            record("T1d geometry: the screen's y axis runs down, and the harness measures its scale rather "
+                   "than assuming the two axes share one",
+                   abs(d_el) > 1.0 and d_el * d_sy < 0 and 0.5 <= env.assist_y_span <= 2.0,
                    f"the stick up moved the view {-d_el:+.1f} degrees up and the target {d_sy * env.h:+.0f} px "
-                   f"down the frame; the same sign both ways would mean the vertical axis is steered backwards")
+                   f"down a frame {env.h:.0f} px tall, which is {flat:.0f} px per radian against {focal:.0f} "
+                   f"across: this game's y fraction spans {env.assist_y_span:.3f} client heights "
+                   f"({env.assist_y_span * env.h:.0f} px), and a source that took it for the client height "
+                   f"would under-read every vertical error by a quarter")
         else:
             record("T1d geometry: the screen's y axis runs down", False, "no target to watch while pitching")
         oracle.delete_target()
@@ -988,12 +1071,19 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
     if dead is None:
         record("T1c the loop's own dead time", False, "the view never moved for a stick command")
         return
-    env.assist_dead_time = max(0.08, min(0.25, dead * float(cfg.get("dead_time_pessimism", 1.4))))
+    floor_s = float(cfg.get("dead_time_floor_ms", 50.0)) / 1000.0
+    env.assist_dead_time = max(floor_s, min(0.25, dead * float(cfg.get("dead_time_pessimism", 1.4))))
     env.measured.setdefault("T1", {})["dead_time_ms"] = {"unit": "ms", "value": round(dead * 1000.0, 1)}
-    record("T1c the loop's own dead time is inside the 60 to 120 ms the plan budgeted",
-           0.02 <= dead <= 0.20,
-           f"{dead * 1000:.0f} ms measured from the command to the view moving; the servo is told "
-           f"{env.assist_dead_time * 1000:.0f} ms, which is the pessimism a servo needs to not overshoot")
+    record("T1c the loop's own dead time is measured, and is under the 60 to 120 ms the plan budgeted "
+           "for a loop that watches a rendered frame",
+           0.0 < dead <= 0.20,
+           f"{dead * 1000:.0f} ms from the command to the view moving, which is at the resolution of this "
+           f"oracle (it streams at 50 Hz, and 0.5 degrees at the magnitude used is 14 ms of turning on its "
+           f"own): a script oracle reads the game's state rather than its picture, so this is a floor and "
+           f"phase 2's capture path will be far slower. The servo is told "
+           f"{env.assist_dead_time * 1000:.0f} ms, the larger of that times "
+           f"{float(cfg.get('dead_time_pessimism', 1.4)):.1f} and the recipe's floor, because a servo told "
+           f"less than the truth overshoots by about the difference and one told far more is merely slow")
 
     ceiling = act.expected("right", 1.0)
     snap_ms = float(cfg.get("snap_ms", 600.0)) / 1000.0
@@ -1004,16 +1094,15 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
     # degree or the servo's own floor, whichever is larger: under that floor
     # the rate wanted is below the game's stick deadzone and the servo
     # commands nothing, so a tighter gate would be a check that cannot pass.
-    visible = 0.45 * fov_deg(env.w, env.assist_focal)
+    visible = math.degrees(math.atan(0.92 * (env.w / 2.0) / env.assist_focal))
     for bearing in [float(b) for b in cfg.get("snap_bearings", [5.0, 15.0, 30.0])]:
         if abs(bearing) > visible:
             record(f"T2 snap: a target {bearing:.0f} degrees off centre", True,
-                   f"outside the {visible * 2:.0f} degree window this game draws, so it would not be on "
-                   f"screen and nothing may engage a target the user cannot see; skipped")
+                   f"past the edge of the {fov_deg(env.w, env.assist_focal):.0f} degree window this game "
+                   f"draws (anything over {visible:.0f} degrees off centre), and nothing may engage a "
+                   f"target the user cannot see; skipped")
             continue
-        env.front()
-        time.sleep(0.2)
-        if not oracle.spawn_target(bearing, range_m):
+        if not assist_place(env, act, oracle, bearing, range_m):
             record(f"T2 snap {bearing:.0f} degrees", False, "the mission did not put a target on screen")
             continue
         budget = snap_ms if abs(bearing) <= 15.0 else wide_ms
@@ -1022,11 +1111,13 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
         tol = max(settle_deg, 1.2 * servo.settle_floor_deg)
         res = assist_snap(env, act, runner, servo, cfg, max_hold=budget, settle_deg=tol)
         after = oracle.target()
-        ok = (res.get("settled") and res.get("elapsed", 9.9) <= budget + 0.1
+        arrived = res.get("settled_at")
+        ok = (res.get("settled") and arrived is not None and arrived <= budget
               and after is not None and abs(after["bearing"]) <= tol
               and (res.get("overshoot") or 0.0) <= 2.0)
-        env.measured.setdefault("T2", {})[f"{bearing:.0f}"] = {"unit": "ms",
-                                                               "value": round(res.get("elapsed", 0.0) * 1000, 1)}
+        env.measured.setdefault("T2", {})[f"{bearing:.0f}"] = {
+            "unit": "ms", "value": round((arrived if arrived is not None else res.get("elapsed", 0.0)) * 1000, 1)}
+        assist_keep(env, f"T2 {bearing:.0f} deg", res, before, after)
         record(f"T2 snap: a target {bearing:.0f} degrees off settles inside {budget * 1000:.0f} ms, "
                f"within {tol:.2f} degrees, without overshooting", bool(ok),
                (f"from {before['bearing']:+.1f} deg; " if before else "") + assist_note(res, after)
@@ -1041,9 +1132,7 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
     for speed in [float(s) for s in cfg.get("walk_speeds", [1.0, 2.0])]:
         results = {}
         for lead in (True, False):
-            env.front()
-            time.sleep(0.2)
-            if not oracle.spawn_target(walk_bearing, walk_range):
+            if not assist_place(env, act, oracle, walk_bearing, walk_range):
                 continue
             oracle.walk_target(speed)
             time.sleep(0.5)
@@ -1052,6 +1141,7 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
                               settle_deg=max(1.5, 1.2 * servo.settle_floor_deg))
             after = oracle.target()
             results[lead] = (res, after)
+            assist_keep(env, f"T3 {speed:.0f} m/s {'lead' if lead else 'no lead'}", res, None, after)
             oracle.delete_target()
             env.reset()
         if True not in results:
@@ -1060,7 +1150,8 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
         res, after = results[True]
         crossing = abs(math.degrees(math.atan(speed / max(1.0, walk_range))))
         tol = max(1.5, 1.2 * res["servo"].settle_floor_deg)
-        ok = res.get("settled") and after is not None and abs(after["bearing"]) <= tol
+        ok = (res.get("settled") and res.get("settled_at") is not None
+              and after is not None and abs(after["bearing"]) <= tol)
         record(f"T3 snap: a target walking at {speed:.0f} m/s at {walk_range:.0f} m "
                f"(about {crossing:.1f} degrees a second) settles within {tol:.2f} degrees", bool(ok),
                assist_note(res, after))
@@ -1068,13 +1159,28 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
             blind, blind_after = results[False]
             with_lead = abs(after["bearing"]) if after else 9.9
             without = abs(blind_after["bearing"]) if blind_after else 9.9
-            record(f"T3b the velocity lead is what does it at {speed:.0f} m/s", with_lead <= without,
-                   f"{with_lead:.2f} degrees off with the lead, {without:.2f} without")
+            floor = res["servo"].settle_floor_deg
+            standing = crossing / res["servo"].kp
+            # A comparison is only a comparison where the thing being compared
+            # is larger than the smallest correction the servo can make. Half
+            # as much again as the floor is the margin: below it the two runs
+            # differ by less than one command.
+            if without < 1.5 * floor:
+                record(f"T3b the velocity lead at {speed:.0f} m/s", True,
+                       f"turning it off left {without:.2f} degrees, against the {floor:.2f} this game's stick "
+                       f"deadzone stops the servo correcting below, so there is nothing here to tell the two "
+                       f"apart with ({with_lead:.2f} with the lead; a proportional term with no prediction "
+                       f"would have left {standing:.2f}). The lead is worth what the loop's real delay costs, "
+                       f"and a script oracle's delay is 16 ms: the simulation and phase 2's capture path are "
+                       f"where it earns its place")
+            else:
+                record(f"T3b the velocity lead is what closes the standing error at {speed:.0f} m/s",
+                       with_lead <= without,
+                       f"{with_lead:.2f} degrees off with the lead, {without:.2f} without, against the "
+                       f"{standing:.2f} a proportional term alone would leave")
 
     # T4 silence: a target on screen, nothing asked for, nothing sent
-    env.front()
-    time.sleep(0.2)
-    if oracle.spawn_target(10.0, range_m):
+    if assist_place(env, act, oracle, 10.0, range_m):
         act.release()
         time.sleep(0.2)
         before = env.oracle.pose()
@@ -1092,9 +1198,7 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
         env.reset()
 
     # T5 the user takes over
-    env.front()
-    time.sleep(0.2)
-    if oracle.spawn_target(25.0, range_m):
+    if assist_place(env, act, oracle, 25.0, range_m):
         servo = assist_servo(env, act, env.assist_dead_time, ceiling)
         started = assist_snap(env, act, runner, servo, cfg, max_hold=2.0, wait=False)
         time.sleep(0.25)
@@ -1103,7 +1207,7 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
         time.sleep(0.08)
         busy = on_qt(lambda: runner.busy)
         sent = float(act.sent().get("right_x", 0.0))
-        res = assist_result(env, runner, started["started"])
+        res = assist_result(env, runner, started["started"], started["settle_px"])
         expected = act.expected("right", nudge / act.travel("right"))
         act.release()
         record("T5 the user takes over: a drag on their own stick stops the snap and the driver is left "
@@ -1115,9 +1219,7 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
         env.reset()
 
     # T6 the target disappears
-    env.front()
-    time.sleep(0.2)
-    if oracle.spawn_target(20.0, range_m):
+    if assist_place(env, act, oracle, 20.0, range_m):
         servo = assist_servo(env, act, env.assist_dead_time, ceiling)
         started = assist_snap(env, act, runner, servo, cfg, max_hold=3.0, wait=False)
         time.sleep(0.3)
@@ -1126,7 +1228,7 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
         while on_qt(lambda: runner.busy) and time.monotonic() - gone_at < 2.0:
             time.sleep(0.01)
         released = time.monotonic() - gone_at
-        res = assist_result(env, runner, started["started"])
+        res = assist_result(env, runner, started["started"], started["settle_px"])
         sent = act.sent()
         tail = [float(s.get("mx", 0.0)) for s in (res.get("look", {}).get("samples") or [])][-4:]
         record("T6 the target goes: the command decays to nothing and the primitive ends uncompleted",
@@ -1137,9 +1239,7 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
         env.reset()
 
     # T7 the kill switch
-    env.front()
-    time.sleep(0.2)
-    if oracle.spawn_target(25.0, range_m):
+    if assist_place(env, act, oracle, 25.0, range_m):
         servo = assist_servo(env, act, env.assist_dead_time, ceiling)
         started = assist_snap(env, act, runner, servo, cfg, max_hold=3.0, wait=False)
         time.sleep(0.25)
@@ -1148,7 +1248,7 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
         busy = on_qt(lambda: runner.busy)
         took = time.monotonic() - t0
         sent = act.sent()
-        res = assist_result(env, runner, started["started"])
+        res = assist_result(env, runner, started["started"], started["settle_px"])
         record("T7 kill switch: the path Ctrl+Alt+F12 takes releases the axes at once",
                (not busy) and abs(float(sent.get("right_x", 0.0))) < 1e-6 and res.get("reason") == "stopped",
                f"{res.get('reason')} in {took * 1000:.0f} ms, driver RX={float(sent.get('right_x', 0.0)):+.3f}")
@@ -1156,19 +1256,20 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
         env.reset()
 
     # T8 the ceiling
-    env.front()
-    time.sleep(0.2)
     low = min(0.5, ceiling)
     far = min(float(cfg.get("ceiling_bearing", 30.0)), visible)
-    if oracle.spawn_target(far, range_m):
+    if assist_place(env, act, oracle, far, range_m):
         servo = assist_servo(env, act, env.assist_dead_time, low)
         res = assist_snap(env, act, runner, servo, cfg, max_hold=wide_ms, settle_deg=settle_deg)
         sent_max = max([abs(float(s.get("mx", 0.0))) for s in (res.get("look", {}).get("samples") or [])] or [9.9])
         after = oracle.target()
+        assist_keep(env, "T8 ceiling", res, None, after)
         record(f"T8 ceiling: with the stick capped at {low:.2f} the servo never asks for more",
                sent_max <= low + 1e-9,
                f"largest magnitude {sent_max:.3f} against a {low:.2f} ceiling ({ceiling:.2f} is what this "
-               f"widget gives the user); " + assist_note(res, after))
+               f"widget gives the user); at that cap this game turns at {servo.rate_for_magnitude(low):.0f} "
+               f"degrees a second, so a {far:.0f} degree snap cannot finish inside the budget and is not "
+               f"meant to; " + assist_note(res, after))
         oracle.delete_target()
         env.reset()
 

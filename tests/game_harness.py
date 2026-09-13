@@ -729,21 +729,27 @@ NIMBUS_KILL = {
 		private _tgt = "none";
 		if (!isNull NIMBUS_TGT) then {
 			private _head = NIMBUS_TGT modelToWorld (NIMBUS_TGT selectionPosition "head");
+			private _cam = positionCameraToWorld [0, 0, 0];
+			private _rx = (_head select 0) - (_cam select 0);
+			private _ry = (_head select 1) - (_cam select 1);
+			private _rz = (_head select 2) - (_cam select 2);
+			private _flat = sqrt (_rx * _rx + _ry * _ry);
+			private _dist = sqrt (_rx * _rx + _ry * _ry + _rz * _rz);
+			private _az = (_rx atan2 _ry) - _yaw;
+			if (_az > 180) then { _az = _az - 360; };
+			if (_az < -180) then { _az = _az + 360; };
+			private _el = (if (_flat > 0.01) then { atan (_rz / _flat) } else { 0 }) - _pitch;
 			private _s = worldToScreen _head;
 			if (count _s == 2) then {
-				private _cam = positionCameraToWorld [0, 0, 0];
-				private _rx = (_head select 0) - (_cam select 0);
-				private _ry = (_head select 1) - (_cam select 1);
-				private _rz = (_head select 2) - (_cam select 2);
-				private _flat = sqrt (_rx * _rx + _ry * _ry);
-				private _az = (_rx atan2 _ry) - _yaw;
-				if (_az > 180) then { _az = _az - 360; };
-				if (_az < -180) then { _az = _az + 360; };
-				private _el = (if (_flat > 0.01) then { atan (_rz / _flat) } else { 0 }) - _pitch;
 				private _sf = worldToScreen (NIMBUS_TGT modelToWorld [0, 0, 0]);
 				private _h = if (count _sf == 2) then { abs ((_sf select 1) - (_s select 1)) } else { 0 };
-				_tgt = format ["%%1,%%2,%%3,%%4,%%5,%%6,%%7", _s select 0, _s select 1, _h / 3, _h, _az, _el,
-					sqrt (_rx * _rx + _ry * _ry + _rz * _rz)];
+				_tgt = format ["%%1,%%2,%%3,%%4,%%5,%%6,%%7", _s select 0, _s select 1, _h / 3, _h, _az, _el, _dist];
+			} else {
+				// Placed, but the engine will not project it: behind the camera or
+				// past the edge of the view. The loop must treat that as no target
+				// at all, and the harness needs to know where it went, so the line
+				// says so rather than falling back to "none".
+				_tgt = format ["off,%%1,%%2,%%3", _az, _el, _dist];
 			};
 		};
 		private _line = format ["NIMBUS_POSE t=%%1 x=%%2 y=%%3 z=%%4 yaw=%%5 pitch=%%6 dir=%%7 buttons=%%8 execs=%%9 tgt=%%10", diag_tickTime, _p select 0, _p select 1, _p select 2, _yaw, _pitch, getDir player, _active joinString ",", _execs, _tgt];
@@ -1036,7 +1042,7 @@ class Arma3Oracle(Oracle):
         while time.monotonic() < deadline:
             p = self._fresh(0.3)
             if p and p.get("tgt", "none") != "none":
-                return True
+                return True      # placed; whether the engine will draw it is target()'s business
         return False
 
     def walk_target(self, speed_m_s: float) -> bool:
@@ -1054,16 +1060,29 @@ class Arma3Oracle(Oracle):
                 return True
         return False
 
-    def target(self) -> Optional[Dict[str, float]]:
-        """The target's screen position and true bearing right now, or None."""
+    def target(self) -> Optional[Dict[str, Any]]:
+        """Where the target is right now, or ``None`` when there is not one.
+
+        ``visible`` says whether the engine projected it to the screen. A
+        target that is placed but not drawn still reports its bearing,
+        elevation and range, which is what tells the harness where the view
+        has to move before it can measure anything: the pose's own pitch
+        field cannot be trusted for that on this game.
+        """
         p = self._fresh(1.0)
         if not p or p.get("tgt", "none") == "none":
             return None
+        parts = str(p["tgt"]).split(",")
         try:
-            sx, sy, w, h, az, el, dist = (float(v) for v in str(p["tgt"]).split(","))
-        except ValueError:
+            if parts[0] == "off":
+                az, el, dist = (float(v) for v in parts[1:4])
+                return {"visible": False, "sx": None, "sy": None, "w": 0.0, "h": 0.0,
+                        "bearing": az, "elevation": el, "range": dist}
+            sx, sy, w, h, az, el, dist = (float(v) for v in parts)
+        except (ValueError, IndexError):
             return None
-        return {"sx": sx, "sy": sy, "w": w, "h": h, "bearing": az, "elevation": el, "range": dist}
+        return {"visible": True, "sx": sx, "sy": sy, "w": w, "h": h,
+                "bearing": az, "elevation": el, "range": dist}
 
     def wait_echo(self, marker: str, offset: int, timeout: float = 2.0) -> bool:
         deadline = time.monotonic() + timeout
@@ -1583,6 +1602,8 @@ class GameEnv:
         self.measured: Dict[str, Dict[str, Dict[str, Any]]] = {}   # check -> key -> {unit, value}
         self.assist_focal = 0.0        # px per radian at the centre, measured by the T1 check
         self.assist_dead_time = 0.1    # seconds the servo is told the loop takes, from T1c
+        self.assist_y_span = 1.0       # the screen height the oracle's y fraction spans, in client heights
+        self.assist_runs: List[Dict[str, Any]] = []   # one entry per closed-loop run, for the log
         self.records: List[Dict[str, Any]] = []
         self.launched_at = 0.0
         self.window_at = 0.0
@@ -2098,6 +2119,8 @@ class GameEnv:
                        "launch_to_ready_s": round(self.ready_at - self.launched_at, 1) if self.ready_at else None,
                        "reset_pose": self.oracle.reset_pose, "steps": self.records,
                        "assist": {"focal_px": round(self.assist_focal, 1),
-                                  "dead_time_s": round(self.assist_dead_time, 4)} if self.assist_focal else None,
+                                  "dead_time_s": round(self.assist_dead_time, 4),
+                                  "y_span": round(self.assist_y_span, 4),
+                                  "runs": self.assist_runs} if self.assist_focal else None,
                        **extra}, fh, indent=2)
         return out
