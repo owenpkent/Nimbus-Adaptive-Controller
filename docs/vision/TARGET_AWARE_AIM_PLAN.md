@@ -52,7 +52,7 @@ If the decision is no, phases 1 and 2 still have value with the perception remov
 
 ## 3. What already exists
 
-Everything below was checked in the tree on 2026-09-13. File and line references are to the current `main`.
+Everything below was checked in the tree on 2026-09-13, before any of this was built. File and line references are to `main` as it was that day, and three of the gaps it names were closed by phase 1: `get_spectator()` is a `@Slot`, the calibrations and the allowlist ship with the executable, and the closed loop exists.
 
 ### 3.1 The seam in the bridge
 
