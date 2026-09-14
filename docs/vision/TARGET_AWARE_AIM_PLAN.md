@@ -362,7 +362,7 @@ Read the same evening, after the guest VM tooling of [VIRTUAL_MACHINE_FEASIBILIT
 
 1. **Phase 1 needs no section 2 decision.** It is harness work: a servo, a `look_at` primitive, and a target published by our own Arma 3 mission. Nothing ships that knows where a target is, and a snap on a button press is the "You direct, the AI executes" model Spectator+ already publishes (README lines 149 to 150). It also answers the one engineering unknown in the plan, whether a rate-controlled stick can be servoed through 100 ms of dead time, and yields "turn to face the door" for voice control whatever is decided later. It can start without touching the README.
 2. **Phase 2 is where the line moves.** Screen capture and a colour detector in the shipped app are the first thing a reader can quote against the non-goal. That decision is better taken with T2 and T3 numbers in hand than now.
-3. **Left 4 Dead 2 is the wrong phase 2 test title.** Its glow outlines are on survivors, so a colour source there aims at allies, and it has Versus and VAC. PowerWash Simulator, which section 12 already names for the shipped list, is the better first target: no anti-cheat, no opponents, already in the harness, and a nozzle onto dirt is the demonstration this audience would actually want. Whether dirt is detectable by colour is the open question, and it is a cheaper one than the survivor glow's per-state behaviour (research item 10).
+3. **Left 4 Dead 2 is the wrong phase 2 test title.** Its glow outlines are on survivors, so a colour source there aims at allies, and it has Versus and VAC. PowerWash Simulator, which section 12 already names for the shipped list, is the better first target: no anti-cheat, no opponents, already in the harness, and a nozzle onto dirt is the demonstration this audience would actually want. Whether dirt is detectable by colour is the open question, and it is a cheaper one than the survivor glow's per-state behaviour (research item 10). *Answered in section 13.3: not the dirt, but the game will draw it for you.*
 4. **The allowlist and the anti-cheat scan are a posture, not an enforcement mechanism.** They are a JSON file and a process list. Their value is that the project can say in one sentence where the feature runs; the README wording should not present them as a guarantee.
 5. **Costs to carry into phase 0.** The schema change in section 8 is a "when to ask" item under `CLAUDE.md`. The capture libraries raise the Python floor to 3.9 or 3.10. And since 2026-09-13 the dev machine runs above a hypervisor (Hyper-V was enabled for the VM track), so phase 1's loop timing is measured on that baseline, the same caveat the mouse filter suites now carry.
 
@@ -378,6 +378,29 @@ The two tracks are independent and share one boundary and one toolbox. One thing
 - **Sequencing.** Neither waits on the other. The VM track passed Gates B and C the same evening (the guest renders on the partitioned GPU and the isolation held through Moonlight and Sunshine) and measured Gate D's latency axis, which the guest lost by two to five frames at the median; it ended where its document expected, "keep the research, do not integrate". That number is also the floor any assist perception through a guest would sit on (the "a guest makes assist worse" point above, now with a figure). This plan is parked on section 2. They compete only for the machine, since both need it unattended while a game runs.
 
 ---
+
+### 13.3 PowerWash Simulator, the colour question answered, 2026-09-13
+
+Section 13.1 named one open question for phase 2: whether PowerWash Simulator's dirt is detectable by colour, which it called a cheaper question than Left 4 Dead 2's survivor glow. It was, and the answer is in two halves, neither of which needed the game to be launched.
+
+**Raw dirt is not a colour the scene leaves free.** The 44 frames the harness saved on 2026-09-08 (the career job "Clean the Back Garden", 2560x1440) were re-read and measured against the kind of window a `ColorTargetSource` would use for grime, hue 15 to 45 degrees, saturation 0.15 to 0.60, value 0.15 to 0.65. That window selects 14 to 55 percent of every frame in the run, and what it selects is the scene, not the dirt: freshly washed wood is 47 to 70 percent inside it (the fence panel the player had already cleaned, mean HSV 43 degrees, 0.47, 0.41), while grass, paving and sky fall outside it at 2.4, 1.7 and 0.0 percent. So a colour key can separate *materials* in this game, and cannot separate dirt from the material it sits on, which is what it would have to do. One honest limit on that: the saved run faces a fence the player had already washed, so the dirt itself was never sampled. The claim the numbers support is that the clean surfaces already occupy the part of colour space grime lives in, not that no colour rule whatever could work.
+
+**The game draws the dirt for you, in a colour you pick.** PowerWash Simulator ships its own dirt highlighting, which the plan's own rule ("ground truth first": the game's accessibility option, then a script path, then a detector) puts above anything Nimbus would build. It is visible without launching the game, in the player's settings (`%USERPROFILE%/AppData/LocalLow/FuturLab/PowerWash Simulator/SaveData/Preferences/FuturPlayerPrefs.sav`, a JSON blob under `GAME_SETTINGS`) and in the game's own strings (`GameAssembly.dll`, `PowerWashSimulator_Data/data.unity3d`):
+
+| What the game has | Where it shows |
+|---|---|
+| A dirt highlight with a player-chosen colour | `DirtHighlightGradient` in the settings; "This is the list of highlight colour options the player will have in the Dirt Highlight Color dropdown on the options screen" |
+| A duration for it, 1.4 s by default, with its own slider and range | `DirtHighlightDuration`, `DirtHighlightDurationMinimum`/`Maximum`/`Default` |
+| An action that triggers it, and a count of how often it has been used | `TriggerDirtHighlight`, `HighlightDirt`, `HighlightDirtCount` |
+| A HUD readout of the dirt layer, including one at the crosshair | `ShowDirtLayerInformation`, `ShowCrosshairDirtLayerInformation`, `HUDDirtLayerProgressView` |
+
+Three consequences for phase 2:
+
+1. **For a user today the answer is the game's own option**, and the right thing for Nimbus to do about PowerWash Simulator is to document it in the compatibility notes and build nothing. That is the plan's top rung working as intended, and it is the first time it has applied to a title on the shipped list.
+2. **If a colour source is built for this title anyway, it should key on the game's own highlight**, not on dirt. That is the Left 4 Dead 2 `cl_glow_survivor_*` case exactly: a colour the player chose, drawn by the game, over a target the game has already decided to show them. It is also the most defensible version of the feature, since nothing is being detected that the user cannot see.
+3. **The crosshair dirt-layer readout is a candidate harness oracle**, a HUD element that says whether the reticle is on dirt and which layer, which would give the T series a ground truth in a second game without a script channel.
+
+Still unknown, and cheap to settle when someone next has the game open: whether the highlight persists while enabled or is the 1.4 second pulse its duration setting suggests, and whether it is bound to an input action a widget could press. Both matter to consequence 2; neither changes consequence 1.
 
 ## Related Documents
 
