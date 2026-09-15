@@ -1,7 +1,7 @@
 # Nimbus Adaptive Controller — Directory Structure
 
 > **Purpose**: Quick reference for developers and AI assistants to understand the codebase layout.  
-> **Last updated**: September 2026 (v1.4.3, plus the unreleased `driver/` work)
+> **Last updated**: September 2026 (v1.4.3, plus the unreleased `driver/` and `vm/` work)
 
 ---
 
@@ -180,6 +180,27 @@ The Nimbus Mouse Filter, a KMDF upper filter on the mouse class that hands the p
 | `package.ps1` | Build and EV-sign the attestation submission CAB; `-VerifySigned` checks the package Microsoft returns |
 | `enable-testsigning.ps1`, `install-dev.ps1`, `uninstall-dev.ps1` | Elevated dev loop; the installer verifies the load and rolls back automatically |
 | `pnp-common.ps1` | Shared helper: restarts every mouse with `pnputil /restart-device` so the filter attaches or detaches without a reboot |
+
+---
+
+## Guest VM Tooling: `vm/`
+
+The scripts behind `docs/vision/VIRTUAL_MACHINE_FEASIBILITY.md`: a Windows 11 guest on the Windows host sharing the GPU through Hyper-V GPU-PV, the pad in through Moonlight and Sunshine, and the isolation proof (Gate C). Research tooling, not part of the app or the installer; `vm/README.md` is the runbook.
+
+| File | Purpose |
+|------|---------|
+| `00-host-preflight.ps1` | Read-only host inventory and verdict (edition, firmware, one GPU, VirtualBox, the mouse filter's reboot safety) |
+| `10-enable-hyperv.ps1` | Elevated: the Hyper-V role plus Hyper-V Administrators for the console user; refuses if the mouse would not survive the reboot |
+| `20-check-gpu-partition.ps1` | Gate B part 1: `Get-VMHostPartitionableGpu` |
+| `30-fetch-iso.ps1` | A Windows 11 ISO via Fido, or `-Url` |
+| `40-new-guest.ps1` | Elevated: image applied straight to a VHDX, answer file and guest tooling on it, Generation 2 VM with vTPM, Enhanced Session Mode off |
+| `50-attach-gpu.ps1` | Elevated: partition adapter, MMIO and cache settings, host driver files into the guest's HostDriverStore; `-Verify` is Gate B part 2 |
+| `60-guest-stream.ps1` | Guest phase 2, Moonlight on the host, pairing by PIN through Sunshine's API |
+| `gate_c_host.py` | Gate C, host side: input sweeps, 14 buttons, stick holds, Stop within 500 ms; `--actuator pad` or `nimbus` |
+| `gate_d_latency.py`, `guest/beacon.py` | Gate D, the latency axis: input to photon through the guest against the host natively; the beacon flashes, so unattended only |
+| `guest/setup.ps1`, `guest/unattend.xml` | The guest's unattended first boot and setup |
+| `guest/gate_c_monitor.py`, `guest/render_check.py` | Guest side: the input counter served over HTTP, and the Direct3D 11 device check |
+| `common.ps1` | Shared names, paths, elevation and credential helpers |
 
 ---
 

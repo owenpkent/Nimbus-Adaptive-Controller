@@ -41,7 +41,7 @@
 - [Nimbus Mouse Filter driver README](../driver/README.md): building, test-signing, and dev-installing the kernel filter (prototype, not in any release)
 - [Driver release signing](../driver/SIGNING.md): Partner Center registration, attestation signing, and where attestation stands after the April 2026 Windows Driver Policy
 - [Linux Gaming Technical Proposal](vision/LINUX_GAMING_PROPOSAL.md): a Linux/X11 port of Nimbus, input ownership, session recovery, game presets, and phased acceptance criteria; a separate platform track, not the host this project targets
-- [Virtual Machine Feasibility](vision/VIRTUAL_MACHINE_FEASIBILITY.md): running the game in a guest on the Windows host, why the single-GPU dev machine and Hyper-V leave only GPU-PV, the controller transport that would be needed, and why the measured mouse filter beats all of it
+- [Virtual Machine Feasibility](vision/VIRTUAL_MACHINE_FEASIBILITY.md): running the game in a guest on the Windows host, why the single-GPU dev machine and Hyper-V leave only GPU-PV, the controller transport that would be needed, and why the measured mouse filter beats all of it; section 10 is the 2026-09-13 build and run (the `vm/` scripts, Gate A answered from published policy, Gates B and C passed on the dev machine through the real Moonlight, Sunshine and ViGEm chain, and Gate D's latency axis measured: the guest costs two to five frames against one natively, so the conclusion holds)
 
 ## Distribution & Sustainability
 The business model, open-core playbook, release strategy, sponsorship outreach, voice command and Spectator+ concept documents are kept in a private repository and are not part of this one. What exists of Spectator+ in code is described here:
