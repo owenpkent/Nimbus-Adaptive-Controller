@@ -33,6 +33,8 @@
 - [Keyboard Output](vision/KEYBOARD_OUTPUT.md) — native keystroke/shortcut emission via SendInput; no external dependencies; bundled in installer
 - [Host Mode & Input Isolation](vision/HOST_MODE_ISOLATION.md) — solving the Raw Input tier; VMs, cloud gaming, two-PC streaming, Linux/evdev, and a mouse-class filter driver
 - [Aim Assistance](vision/AIM_ASSISTANCE.md): why aiming is hard, a code audit of the stick pipeline, the assistance options ranked by effort, and the tier 1 build (one radial shaping pass, anti-deadzone, travel, precision modifier) with its five-layer test plan and the measurements against Left 4 Dead 2
+- [Target-Aware Aim Plan](vision/TARGET_AWARE_AIM_PLAN.md): target-aware assistance in single-player games as the closed-loop step of Spectator+: the research on first-party lock-on, anti-cheat policy and the tooling, the rules that keep it defensible, a four-phase build measured against the harness, and the owner decision it turned on. Taken 2026-09-13 for phases 0 to 2. Phase 0 (the allowlist, the anti-cheat refusal and the published wording) and phase 1 (the closed loop, measured in a real game) are built; phase 2, which is where screen capture would enter the shipped app, has not started
+- [Target-Aware Aim Research](vision/TARGET_AWARE_AIM_RESEARCH.md): the dossier behind that plan: capture and detection numbers, the public tools component by component, first-party lock-on options, every anti-cheat statement with dates and quotes, the HCI effect sizes, terms of service, what the repository already has with file and line references, and a ledger of what could not be verified
 - [Game Test Harness](vision/GAME_TEST_HARNESS.md): automated tests against real games with ground truth from the game's console (Source engine) or frame differencing; recipes, oracles, a pad and a Nimbus actuator, the environment Spectator+ will run in, and the Left 4 Dead 2 calibration
 - [Testing Strategy](vision/TESTING_STRATEGY.md): from liveness checks to regression tests; the fast-test runner and CI, the frame oracle as a motion measurement, windowed games, a console-less reset and expected-value bands, with what the saved frames changed about the design and what the rerun of every game found
 - [Linux Probe Plan](vision/LINUX_PROBE_PLAN.md): the EVIOCGRAB and uinput experiment against a real EAC game. Probe 1 is complete, all four criteria pass against Elden Ring under EAC; Wayland (Probe 2) is still open
@@ -49,6 +51,7 @@
 ## Distribution & Sustainability
 The business model, open-core playbook, release strategy, sponsorship outreach, voice command and Spectator+ concept documents are kept in a private repository and are not part of this one. What exists of Spectator+ in code is described here:
 - [Game Test Harness, section 4.7](vision/GAME_TEST_HARNESS.md): Spectator+ v0, scripted primitives (turn, walk, press) calibrated per game and measured in a real game, and what is not built yet
+- [Game Test Harness, section 4.8](vision/GAME_TEST_HARNESS.md): Spectator+ v1, the closed loop: a servo on angular error, a target source, and a `look_at` primitive that steers onto a target the game publishes, with the T series that measures it and the two things the first runs taught
 
 ## Media
 - [Screenshots](screenshots/) — application UI screenshots

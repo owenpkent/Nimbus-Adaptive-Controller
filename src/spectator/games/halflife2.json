@@ -1,0 +1,14 @@
+{
+    "name": "halflife2",
+    "title": "Half-Life 2",
+    "process": "hl2.exe",
+    "modes": ["single"],
+    "anticheat": null,
+    "target_source": "color",
+    "target_params": {},
+    "calibration": "halflife2",
+    "test_only": false,
+    "competitive_decision": null,
+    "decided": {"by": "owner", "on": "2026-09-13", "why": "Single-player Source title with no anti-cheat; already calibrated by the game harness; a Direct3D 9 renderer the harness measures by console pose."},
+    "notes": "Colour source parameters are settled in phase 2; until then the entry only says the title is in scope."
+}

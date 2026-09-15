@@ -146,6 +146,11 @@ except Exception:
 # plain pulse against the active Xbox-style interface.
 _USE_MOUSE_HIDER = sys.platform == "win32"
 
+# Pixels of drag for full deflection when a joystick widget sets no
+# travel_px of its own (QML then uses the drawn radius, which only QML
+# knows). Used to read a normalised deflection back as pixels.
+DEFAULT_TRAVEL_PX = 100.0
+
 # Mouse isolation has two bridge-side implementations in this file. Windows
 # drives the real cursor from the filter's packets (the cursor relay); every
 # other platform draws its own cursor and synthesises Qt events. This flag
@@ -437,6 +442,7 @@ class ControllerBridge(QObject):
         return self._output.active
 
     # ----- Spectator+ -----
+    @Slot(result=QObject)
     def get_spectator(self):
         """The Spectator+ primitive runner bound to this bridge's output.
 
@@ -454,7 +460,29 @@ class ControllerBridge(QObject):
         if self._spectator is None:
             from .spectator.primitives import PrimitiveRunner
             self._spectator = PrimitiveRunner(self.setAxis, self.setButton, parent=self)
+            self._spectator.finished.connect(self._on_spectator_finished)
         return self._spectator
+
+    def _on_spectator_finished(self, _name: str, _completed: bool) -> None:
+        """Give back the sticks the user is still holding once a primitive lets go.
+
+        A primitive ends by zeroing every axis it wrote, which is right for
+        a stick nobody holds. A stick the user holds steady sends no new
+        ``setStickInput``, so without this the driver would keep that zero
+        while the widget still shows deflection. Not after ``stopped``: that
+        is the kill switch and the profile switch, which must leave neutral.
+        """
+        runner = self._spectator
+        if runner is None or getattr(runner, "last_reason", "") == "stopped":
+            return
+        for widget_id, (nx, ny) in list(self._last_raw.items()):
+            w = self._widget_shaping.get(widget_id)
+            if w is None:
+                continue
+            try:
+                self._drive_stick(widget_id, w, nx, ny, advance_filter=False)
+            except Exception:
+                pass
 
     def _stop_spectator(self) -> None:
         """Cancel a running primitive, if any, and zero what it touched."""
@@ -463,6 +491,30 @@ class ControllerBridge(QObject):
                 self._spectator.stop()
             except Exception:
                 pass
+
+    def _spectator_user_stick(self, widget_id: str, nx: float, ny: float,
+                              start: Tuple[float, float] = (0.0, 0.0)) -> None:
+        """Hand control back when the user moves their own stick under a closed loop.
+
+        Section 5's fail-safe rule: any user stick motion above a threshold
+        cancels a running snap. This runs before the stick is driven, so the
+        primitive's axes are released first and what the driver is left
+        holding is the user's own vector rather than the loop's last command.
+        The widget's ``travel_px`` turns the normalised deflection back into
+        the pixels the threshold is written in. ``start`` is where this
+        widget was before this sample, which on its first sample under the
+        loop is where it was when the loop started.
+        """
+        runner = self._spectator
+        if runner is None or not getattr(runner, "watching_user", False):
+            return
+        try:
+            w = self._widget_shaping.get(str(widget_id)) or {}
+            travel = float(w.get("travel_px") or 0.0) or DEFAULT_TRAVEL_PX
+            runner.note_user_stick(float(nx) * travel, float(ny) * travel, key=str(widget_id),
+                                   start_px=(float(start[0]) * travel, float(start[1]) * travel))
+        except Exception:
+            pass
 
     # ----- Scale factor property -----
     def _get_scale(self) -> float:
@@ -1047,10 +1099,12 @@ class ControllerBridge(QObject):
             if w is None:
                 return
             raw = (float(nx), float(ny))
+            before = self._last_raw.get(str(widget_id), (0.0, 0.0))
             if raw == (0.0, 0.0):
                 self._last_raw.pop(str(widget_id), None)
             else:
                 self._last_raw[str(widget_id)] = raw
+            self._spectator_user_stick(str(widget_id), raw[0], raw[1], before)
             self._drive_stick(str(widget_id), w, raw[0], raw[1])
         except Exception:
             pass

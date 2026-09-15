@@ -52,6 +52,12 @@ if src_path.exists():
     for py_file in src_path.rglob('*.py'):
         rel_path = py_file.relative_to(PROJECT_ROOT)
         src_datas.append((str(py_file), str(rel_path.parent)))
+    # Spectator+ data: the per-game calibrations and the target assist allowlist
+    # (src/spectator/calibrations/*.json, src/spectator/games/*.json). Read at
+    # run time next to the package, so they ship beside it.
+    for json_file in (src_path / 'spectator').rglob('*.json'):
+        rel_path = json_file.relative_to(PROJECT_ROOT)
+        src_datas.append((str(json_file), str(rel_path.parent)))
 
 # Collect all numpy submodules — numpy 2.x restructured internals (e.g. numpy._core._exceptions)
 # that PyInstaller cannot auto-detect; collect_all ensures nothing is missed.

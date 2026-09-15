@@ -40,7 +40,15 @@ Users build their own controller layout by dragging, dropping, and resizing widg
 ### Core Functionality
 - **Modular Layout Builder**: Drag-and-drop canvas to place joysticks, buttons, sliders, D-pads, and steering wheels anywhere
 - **Dual Virtual Joysticks**: Independent axis mapping with FPS-style delta tracking and tremor filtering for wheelchair joysticks. Per-stick travel, an output anti-deadzone that lifts the smallest movement past the game's own deadzone, a precision modifier button, and a live test pad for calibrating against a running game (see [Aim Assistance](docs/vision/AIM_ASSISTANCE.md)).
-- **What Nimbus will not do**: it reshapes input the user produces and never originates aim. No screen reading, no target detection, no synthetic stick motion the user did not command. The reasoning is in [Aim Assistance, section 10](docs/vision/AIM_ASSISTANCE.md#10-the-line-we-do-not-cross).
+- **What Nimbus will and will not do about aim**: it reshapes input the user produces. In single-player games it can also help the user land on what they are already aiming at: it will slow or steer a stick the user is moving, or turn to a target once when the user asks. It never plays for the user, never fires, never hides what it is doing, and refuses to run target-aware assistance in any game with anti-cheat or competitive play. In plain terms, target assist:
+  - never moves unless the user is moving or asked, and cannot turn faster than the user could;
+  - refuses to run where another player could be on the other end, and beside any anti-cheat;
+  - aims, it does not shoot: no trigger automation, no recoil compensation, no ballistic prediction;
+  - announces itself: no jitter, no "humanization", no hidden overlay, no stream guard;
+  - does not upload your screen; frames never leave the machine;
+  - hands control back the moment it loses sight of the target, on a profile switch, or on Ctrl+Alt+F12.
+
+  The reasoning is in [Aim Assistance, section 10](docs/vision/AIM_ASSISTANCE.md#10-the-line-we-do-not-cross) and the rules, the allowlist and the build order in the [Target-Aware Aim plan](docs/vision/TARGET_AWARE_AIM_PLAN.md).
 - **Trigger/Slider Controls**: Horizontal and vertical sliders with 3 snap modes (hold, snap-to-zero, spring-to-center)
 - **Button Support**: Up to 128 configurable buttons with toggle/momentary modes, color and shape options
 - **Macro Joystick Mode**: Convert any joystick into a macro pad — map directions to buttons, axes, or turbo actions
@@ -147,7 +155,7 @@ Nimbus Adaptive Controller is evolving beyond a virtual controller into a broade
 Speak to control. Buttons, axes, and macros triggered by voice — using offline engines (Faster-Whisper, Vosk) for low latency and privacy, or cloud engines for higher accuracy. Goal: act on interim results for time-critical commands.
 
 ### 🤖 Spectator+ — AI-Assisted Play
-*"You direct. The AI executes."* An accessibility-first AI copilot: the user provides high-level intent (via voice, click, or switch), and a trained agent handles precise execution through the existing vJoy/ViGEm bridge. Designed for users who have the cognitive engagement to play but not the fine motor precision. A first, model-free version exists: scripted primitives (turn by an angle, walk for a distance, press a button) in `src/spectator/`, calibrated per game by the [game test harness](docs/vision/GAME_TEST_HARNESS.md) and measured in Left 4 Dead 2 to within a few degrees. No way to trigger them from the UI yet.
+*"You direct. The AI executes."* An accessibility-first AI copilot: the user provides high-level intent (via voice, click, or switch), and a trained agent handles precise execution through the existing vJoy/ViGEm bridge. Designed for users who have the cognitive engagement to play but not the fine motor precision. A first, model-free version exists: scripted primitives (turn by an angle, walk for a distance, press a button) in `src/spectator/`, calibrated per game by the [game test harness](docs/vision/GAME_TEST_HARNESS.md) and measured in Left 4 Dead 2 to within a few degrees. Since 2026-09-13 there is a closed loop beside them: a primitive that steers the view onto a target the game itself publishes, measured in Arma 3 to a quarter of a degree with no overshoot, and bound by the rules in the [target-aware aim plan](docs/vision/TARGET_AWARE_AIM_PLAN.md): it produces nothing without a command, cannot turn faster than the user could, and hands control back the moment the user's own stick moves. Both are harness-only so far: nothing in the UI can trigger either, and the closed loop's only source of targets is a test mission the harness generates.
 
 ### ⌨️ Keyboard Output Mode
 Any Nimbus button or slider emits native keyboard shortcuts to any application — Photoshop, DaVinci Resolve, OBS, a browser — with no external software. Enables Nimbus as a **Stream Deck replacement**, a **drawing tablet express key surface**, or a **DAW controller**.

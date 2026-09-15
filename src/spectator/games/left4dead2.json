@@ -1,0 +1,14 @@
+{
+    "name": "left4dead2",
+    "title": "Left 4 Dead 2",
+    "process": "left4dead2.exe",
+    "modes": ["single", "coop", "competitive"],
+    "anticheat": "VAC",
+    "target_source": "color",
+    "target_params": {"note": "survivor glow (cl_glow_survivor_*) outlines allies, not infected; see plan section 13.1"},
+    "calibration": "left4dead2",
+    "test_only": true,
+    "competitive_decision": {"allow": true, "on": "2026-09-13", "why": "Harness only, in the single-player campaign; Versus exists, so this is never a shipped entry."},
+    "decided": {"by": "owner", "on": "2026-09-13", "why": "The harness's reference title, kept as a test entry for its console oracle; not a phase 2 target because its outlines mark allies."},
+    "notes": "Refused to the app by test_only."
+}

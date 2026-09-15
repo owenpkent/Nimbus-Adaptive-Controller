@@ -260,11 +260,15 @@ Screen-capture target detection driving the stick is an aimbot regardless of int
 
 As of 2026 both Activision and Respawn have stated publicly that genuine accessibility hardware is exempt and encouraged, and that XIM and Cronus are not accessibility tools despite being marketed as such. Respawn classified XIM adapters as cheating devices in March 2026 with permanent bans and no appeals; Activision's Ricochet update for Black Ops 7 Season 2 describes detection built to recognize *classes of machine-driven behavior* rather than specific device signatures. `HOST_MODE_ISOLATION.md` section 8 already reaches the same conclusion from the driver side: at the device layer Nimbus is not distinguishable from a XIM, so the distinction has to be behavioral.
 
-The property that keeps Nimbus on the right side of that line is simple and worth stating explicitly in the README as a non-goal:
+The property that keeps Nimbus on the right side of that line was stated in the README as a non-goal from the start, and its multiplayer half is unchanged: **screen-capture target detection driving the stick is an aimbot regardless of intent in any game where another person is on the other end, and Nimbus will not build one.** Everything in sections 4 through 6 satisfies that, and nothing in this document reads the screen.
 
-> **Nimbus reshapes input the user produces. It never originates aim.**
+On 2026-09-13 the owner narrowed the other half, on the research in [TARGET_AWARE_AIM_PLAN.md](TARGET_AWARE_AIM_PLAN.md) and its dossier. The line now reads:
 
-Everything in sections 4 through 6 satisfies that. Nothing in this document proposes reading the screen, detecting targets, or generating input the user did not command.
+> **Nimbus reshapes input the user produces. In single-player games it can also help the user land on what they are already aiming at: it will slow or steer a stick the user is moving, or turn to a target once when the user asks. It never plays for the user, never fires, never hides what it is doing, and refuses to run target-aware assistance in any game with anti-cheat or competitive play.**
+
+What that means in code is the plan's section 5, and its first piece is built: `src/spectator/policy.py` decides, for the foreground game, whether target-aware assistance may run at all. A positive allowlist by title (`src/spectator/games/*.json`, two shipped single-player entries and two harness-only ones), a refusal whenever an anti-cheat service is running, a refusal for any title with a competitive mode until a per-title decision is recorded in its entry, and a refusal with the reason on screen for anything unknown. It is a posture rather than an enforcement mechanism (a JSON file and a process list), and it is checked by `tests/test_assist_policy.py`.
+
+Phase 1 followed the same day: the closed loop, proved against a game's own script rather than its picture. `src/spectator/servo.py` turns an angular error into stick magnitudes through the calibration this document's section 12 measured, `targets.py` says where the targets are, and `PrimitiveRunner.look_at` joins them into a bounded snap that produces nothing without a command and hands control back the moment the user touches their own stick. Nothing in it reads the screen: the targets come from the harness's own Arma 3 mission, the policy refuses that title to the app, and the app still has no way to ask for any of it. The line above is unchanged by it. What phase 2 would add is the perception (screen capture and a detector) and the tiers that steer a stick the user is already moving, and that is where the wording will be quoted at us; the plan's section 13 recommends taking that decision with phase 1's numbers in hand, which now exist.
 
 ---
 
