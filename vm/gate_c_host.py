@@ -55,6 +55,7 @@ import json
 import os
 import sys
 import time
+import traceback
 import urllib.request
 from ctypes import wintypes
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -170,15 +171,32 @@ user32.GetForegroundWindow.restype = wintypes.HWND
 user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 user32.IsWindowVisible.argtypes = [wintypes.HWND]
+user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_kernel32.GetConsoleWindow.restype = wintypes.HWND
 VK_MENU = 0x12
+# A console's title is the command line that started it, which carries
+# "--viewer-title Moonlight" itself, so a console must never match.
+CONSOLE_CLASSES = ("ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS", "PseudoConsoleWindow")
 
 
 def find_window(title_substring: str) -> int:
-    """First visible top-level window whose title contains the substring, or 0."""
+    """First visible top-level window whose title contains the substring, or 0.
+
+    Consoles and terminals are skipped (their title is the command line,
+    which contains the substring whenever it was passed as an argument).
+    """
     found: List[int] = []
     needle = title_substring.lower()
+    own_console = _kernel32.GetConsoleWindow() or 0
 
     def cb(hwnd, _lparam):
+        if hwnd == own_console:
+            return True
+        cls = ctypes.create_unicode_buffer(128)
+        user32.GetClassNameW(hwnd, cls, 128)
+        if cls.value in CONSOLE_CLASSES:
+            return True
         if user32.IsWindowVisible(hwnd):
             buf = ctypes.create_unicode_buffer(256)
             user32.GetWindowTextW(hwnd, buf, 256)
@@ -341,6 +359,35 @@ class Report:
         return all(r["pass"] is not False for r in self.rows)
 
 
+class RunGuard:
+    """Makes a run that stops partway fail the gate instead of passing on the rows it reached.
+
+    ``judged_ok`` is ``all()`` over the rows that exist, so a run that dies
+    after one passing check would otherwise print PASS. The harness's
+    ``NimbusActuator.run`` also swallows a scenario's exception, so the
+    guard records the failure itself, and :meth:`settle` catches a run
+    that never reached its end for any other reason.
+    """
+
+    CHECK = "the checks ran to the end"
+
+    def __init__(self, rep: "Report") -> None:
+        self.rep = rep
+        self.accounted = False
+
+    def __call__(self, body: Callable[[], None]) -> None:
+        try:
+            body()
+        except Exception as exc:   # noqa: BLE001
+            traceback.print_exc()
+            self.rep.add("run", self.CHECK, False, f"stopped by {type(exc).__name__}: {exc}")
+        self.accounted = True
+
+    def settle(self) -> None:
+        if not self.accounted:
+            self.rep.add("run", self.CHECK, False, "the run ended before its checks finished")
+
+
 def _counter_delta(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, int]:
     b, a = before["counters"], after["counters"]
     return {k: a.get(k, 0) - b.get(k, 0) for k in a}
@@ -355,8 +402,12 @@ GAMEPAD_VK_KEYS = ("keyboard_input_gamepad_vk", "ll_keyboard_gamepad_vk")
 
 
 def phase_host_input(mon: GuestMonitor, rep: Report, loopback: bool, viewer_title: Optional[str] = None) -> None:
-    before = mon.snapshot()
     with ViewerFocus(viewer_title) as vf:
+        # The baseline comes after focusing: bring_to_front taps Alt to lift
+        # the foreground lock, and a queued Alt-up reaching the viewer once it
+        # is in front is the harness's own key, not a leak.
+        time.sleep(0.2)
+        before = mon.snapshot()
         sent = host_input_burst()
         time.sleep(0.4)
         after = mon.snapshot()
@@ -543,10 +594,12 @@ def main(argv: List[str]) -> int:
 
     if args.actuator == "pad":
         act = PadDirect()
+        guard = RunGuard(rep)
         try:
-            run_phases(mon, rep, act, args.loopback, args.skip_host_input, known, args.viewer_title)
+            guard(lambda: run_phases(mon, rep, act, args.loopback, args.skip_host_input, known, args.viewer_title))
         finally:
             act.close()
+        guard.settle()
     else:
         from tests.game_harness import NimbusActuator
         act = NimbusActuator()
@@ -569,14 +622,17 @@ def main(argv: List[str]) -> int:
             print("Nimbus failed to start")
             return 2
 
-        def scenario() -> None:
+        guard = RunGuard(rep)
+
+        def body() -> None:
             err = act.prepare(None)
             if err:
                 rep.add("nimbus", "app ready", False, err)
                 return
             run_phases(mon, rep, _NimbusStop(act), args.loopback, args.skip_host_input, known, args.viewer_title)
 
-        act.run(scenario)
+        act.run(lambda: guard(body))
+        guard.settle()
 
     ok = rep.judged_ok()
     judged = [r for r in rep.rows if r["pass"] is not None]

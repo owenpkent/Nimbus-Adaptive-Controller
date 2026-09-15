@@ -104,6 +104,24 @@ function Get-HyperVState {
     }
 }
 
+function ConvertTo-PnpInstanceId {
+    <#
+    .SYNOPSIS
+        The PnP instance id inside a device interface path.
+    .DESCRIPTION
+        Get-VMHostPartitionableGpu names a GPU by interface path, e.g.
+        \\?\PCI#VEN_1002&DEV_73FF&...#6&174d5041&0&00000019#{064092b3-...}\GPUPARAV,
+        while Win32_VideoController.PNPDeviceID is the instance id,
+        PCI\VEN_1002&DEV_73FF&...\6&174D5041&0&00000019. Drop the prefix and
+        the interface class, and '#' becomes '\'. Compare case-insensitively.
+    #>
+    param([Parameter(Mandatory)][string]$InterfacePath)
+    $p = $InterfacePath -replace '^\\\\\?\\', ''
+    $cut = $p.IndexOf('#{')
+    if ($cut -ge 0) { $p = $p.Substring(0, $cut) }
+    $p -replace '#', '\'
+}
+
 function Get-DisplayDriverInfo {
     <#
     .SYNOPSIS
@@ -114,9 +132,16 @@ function Get-DisplayDriverInfo {
         into the guest (Windows\System32\DriverStore\FileRepository\<inf>_amd64_<hash>),
         and its size. Works without elevation. The folder is found by the
         INF's original name, which is the CatalogFile stem in the oem INF.
+    .PARAMETER PnpId
+        Describe this adapter. Without it, the first PCI display adapter,
+        which is only right on a host with one GPU; anything that copies a
+        driver for a partition must pass the partitioned GPU's id, or a host
+        with an integrated GPU listed first gets the wrong package.
     #>
+    param([string]$PnpId)
     $ctrl = Get-CimInstance Win32_VideoController |
-        Where-Object { $_.PNPDeviceID -like 'PCI\*' } | Select-Object -First 1
+        Where-Object { $_.PNPDeviceID -like 'PCI\*' -and (-not $PnpId -or $_.PNPDeviceID -eq $PnpId) } |
+        Select-Object -First 1
     if (-not $ctrl) { return $null }
     $signed = Get-CimInstance Win32_PnPSignedDriver |
         Where-Object { $_.DeviceClass -eq 'DISPLAY' -and $_.DeviceID -eq $ctrl.PNPDeviceID } | Select-Object -First 1

@@ -179,6 +179,30 @@ check("INFO rows do not decide the verdict", rep.judged_ok())
 rep.add("x", "fail row", False, "")
 check("one FAIL row fails the verdict", not rep.judged_ok())
 
+crashed = gch.Report()
+
+
+def dies_after_one_check() -> None:
+    crashed.add("pad", "pad present", True, "")
+    raise TimeoutError("the monitor stopped answering (planted by the test)")
+
+
+guard = gch.RunGuard(crashed)
+guard(dies_after_one_check)
+guard.settle()
+check("a run that dies after a passing check fails the verdict",
+      not crashed.judged_ok() and [r["pass"] for r in crashed.rows] == [True, False],
+      str([r["check"] for r in crashed.rows]))
+never = gch.Report()
+never.add("pad", "pad present", True, "")
+gch.RunGuard(never).settle()
+check("a run that never reached its end fails too", not never.judged_ok())
+whole = gch.Report()
+ok_guard = gch.RunGuard(whole)
+ok_guard(lambda: whole.add("pad", "pad present", True, ""))
+ok_guard.settle()
+check("a run that finishes adds no row of its own", whole.judged_ok() and len(whole.rows) == 1)
+
 print("Bridge button ids map onto XInput names")
 names = [gch.expected_button_name(i) for i in range(1, 15)]
 check("14 distinct XInput names for bridge buttons 1..14", len(set(names)) == 14, ",".join(names))

@@ -56,8 +56,18 @@ if (-not $Url) {
     & $curl -L -sS -o $fido 'https://raw.githubusercontent.com/pbatard/Fido/master/Fido.ps1'
     if ($LASTEXITCODE -ne 0) { throw "curl exited $LASTEXITCODE fetching Fido" }
     Write-Step "Asking Microsoft's download page for Windows 11 $Edition $Release x64 $Lang"
-    $Url = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $fido -Win 11 -Rel $Release -Ed $Edition -Lang $Lang -Arch x64 -GetUrl 2>&1 |
-        Where-Object { "$_" -match '^https?://' } | Select-Object -Last 1).ToString().Trim()
+    # Continue for this call only: under Stop, Windows PowerShell 5.1 turns
+    # any stderr line Fido prints (through 2>&1) into a terminating error,
+    # and the guidance below would never be reached.
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $link = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $fido -Win 11 -Rel $Release -Ed $Edition -Lang $Lang -Arch x64 -GetUrl 2>&1 |
+            Where-Object { "$_" -match '^https?://' } | Select-Object -Last 1
+    } finally {
+        $ErrorActionPreference = $eap
+    }
+    $Url = if ($link) { "$link".Trim() } else { $null }
     if (-not $Url) { throw 'Fido returned no link (rate limited, or the page changed). Get an ISO by hand from https://www.microsoft.com/software-download/windows11 and pass -Url or copy it into ' + $isoDir }
 }
 Write-Host "  link: $($Url.Substring(0, [math]::Min(120, $Url.Length)))..."

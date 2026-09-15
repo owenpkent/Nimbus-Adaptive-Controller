@@ -121,7 +121,10 @@ Write-VmLog $VmRoot "GPU partition set: $($gpu.Name), $Percent percent"
 
 # ---- driver files ------------------------------------------------------------
 if (-not $SkipDrivers) {
-    $info = Get-DisplayDriverInfo
+    $pnp = ConvertTo-PnpInstanceId $gpu.Name
+    $info = Get-DisplayDriverInfo -PnpId $pnp
+    if (-not $info) { throw "no display adapter with PnP id $pnp, the one the partition was taken from" }
+    if (-not $info.InfName -or -not $info.StoreDir) { throw "no driver package found for $($info.Name) ($pnp)" }
     Write-Step "Copying the display driver into the guest ($($info.InfName), $($info.StoreMB) MB)"
     $vhdx = ($vm | Get-VMHardDiskDrive | Select-Object -First 1).Path
     $disk = Mount-VHD -Path $vhdx -Passthru | Get-Disk

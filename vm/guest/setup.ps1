@@ -67,11 +67,30 @@ $results.elevated = $elevated
 if (-not $elevated) { Write-Warning 'not elevated: installs and firewall rules will fail; run from an elevated prompt' }
 
 function Step {
+    <#
+    A step is ok only if its body neither threw nor raised a cmdlet error.
+    With $ErrorActionPreference at Continue a failed cmdlet does not throw,
+    so the errors the body added to $Error are counted too. Two kinds are
+    not failures: a native tool's stderr captured with 2>&1 (Windows
+    PowerShell 5.1 wraps each line as NativeCommandError; the exit code is
+    what a step checks), and a lookup allowed to find nothing, which uses
+    -ErrorAction Ignore and so never reaches $Error. Stop is not an option
+    here, because under 5.1 it turns that captured stderr into a throw.
+    #>
     param([string]$Name, [scriptblock]$Body)
     Write-Host "==> $Name"
+    $before = $Error.Count
     try {
         $out = & $Body
-        $results[$Name] = if ($out) { "ok: $out" } else { 'ok' }
+        $new = @(if ($Error.Count -gt $before) { $Error[0..($Error.Count - $before - 1)] }) |
+            Where-Object { -not ($_ -is [Management.Automation.ErrorRecord] -and "$($_.FullyQualifiedErrorId)" -like 'NativeCommandError*') }
+        if ($new) {
+            $first = @($new)[-1]    # $Error is newest first
+            $results[$Name] = "failed: $first"
+            Write-Warning "$Name failed: $first"
+        } else {
+            $results[$Name] = if ($out) { "ok: $out" } else { 'ok' }
+        }
     } catch {
         $results[$Name] = "failed: $($_.Exception.Message)"
         Write-Warning "$Name failed: $($_.Exception.Message)"
@@ -93,7 +112,7 @@ if (-not $Phase2) {
         Set-ItemProperty -Path $wl -Name DefaultUserName -Value $user -Type String
         Set-ItemProperty -Path $wl -Name DefaultPassword -Value $password -Type String
         Set-ItemProperty -Path $wl -Name DefaultDomainName -Value $env:COMPUTERNAME -Type String
-        Remove-ItemProperty -Path $wl -Name AutoLogonCount -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path $wl -Name AutoLogonCount -ErrorAction Ignore   # usually absent
     }
     Step 'power' {
         & powercfg.exe /change monitor-timeout-ac 0 | Out-Null
@@ -107,11 +126,11 @@ if (-not $Phase2) {
             @{ Name = 'Sunshine UDP'; Protocol = 'UDP'; Port = '47998-48000,48002,48010' }
         )
         foreach ($r in $rules) {
-            if (-not (Get-NetFirewallRule -DisplayName $r.Name -ErrorAction SilentlyContinue)) {
+            if (-not (Get-NetFirewallRule -DisplayName $r.Name -ErrorAction Ignore)) {
                 New-NetFirewallRule -DisplayName $r.Name -Direction Inbound -Action Allow -Protocol $r.Protocol -LocalPort ($r.Port -split ',') -Profile Any | Out-Null
             }
         }
-        if (-not (Get-NetFirewallRule -DisplayName 'Nimbus ping' -ErrorAction SilentlyContinue)) {
+        if (-not (Get-NetFirewallRule -DisplayName 'Nimbus ping' -ErrorAction Ignore)) {
             New-NetFirewallRule -DisplayName 'Nimbus ping' -Direction Inbound -Action Allow -Protocol ICMPv4 -IcmpType 8 -Profile Any | Out-Null
         }
     }
@@ -124,7 +143,7 @@ if (-not $Phase2) {
         & (Join-Path $dir 'python.exe') --version
     }
     Step 'vigembus' {
-        if (Get-Service ViGEmBus -ErrorAction SilentlyContinue) { return 'already installed' }
+        if (Get-Service ViGEmBus -ErrorAction Ignore) { return 'already installed' }
         $exe = Fetch $ViGEmUrl (Join-Path $root 'ViGEmBus_1.22.0.exe')
         $p = Start-Process -FilePath $exe -ArgumentList '/exenoui', '/qn', '/norestart' -Wait -PassThru
         if ($p.ExitCode -notin 0, 3010) { throw "installer exited $($p.ExitCode)" }
@@ -140,15 +159,20 @@ if (-not $Phase2) {
         New-Item -ItemType Directory -Path $confDir -Force | Out-Null
         $conf = Join-Path $confDir 'sunshine.conf'
         $lines = if (Test-Path $conf) { @(Get-Content $conf) } else { @() }
-        $want = @{ controller = 'enabled'; keyboard = 'disabled'; mouse = 'disabled'; gamepad = 'x360'; origin_web_ui_allowed = 'lan' }
+        # Ordered, and written without a byte order mark: Set-Content -Encoding
+        # UTF8 on Windows PowerShell 5.1 puts a BOM in front of the first line,
+        # which would glue it to whichever key came first (an unordered
+        # hashtable can put mouse or keyboard there) and hide that setting.
+        $want = [ordered]@{ controller = 'enabled'; keyboard = 'disabled'; mouse = 'disabled'; gamepad = 'x360'; origin_web_ui_allowed = 'lan' }
+        $lines = @($lines | ForEach-Object { "$_".TrimStart([char]0xFEFF) })
         foreach ($k in $want.Keys) {
             $lines = @($lines | Where-Object { $_ -notmatch "^\s*$k\s*=" })
             $lines += "$k = $($want[$k])"
         }
-        Set-Content -Path $conf -Value $lines -Encoding UTF8
+        [IO.File]::WriteAllLines($conf, [string[]]$lines, (New-Object Text.UTF8Encoding $false))
         & (Join-Path $SunshineDir 'sunshine.exe') --creds $user $password 2>&1 | Out-Null
-        $svc = Get-Service SunshineService -ErrorAction SilentlyContinue
-        if ($svc) { Restart-Service SunshineService -ErrorAction SilentlyContinue }
+        $svc = Get-Service SunshineService -ErrorAction Ignore
+        if ($svc) { Restart-Service SunshineService }   # a failed restart leaves the old config live: a failure
         "config written; keyboard and mouse forwarding disabled"
     }
     Step 'monitor' {
@@ -178,9 +202,9 @@ if (-not $Phase2) {
         # SignPath Foundation, and a silent install fails on that with
         # 0xE0000242), the package into the driver store, then a
         # root-enumerated device node with the bundled devcon.
-        $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+        $winget = Get-Command winget.exe -ErrorAction Ignore
         if (-not $winget) { throw 'winget is not available in this session; install VirtualDrivers.Virtual-Display-Driver by hand (github.com/VirtualDrivers/Virtual-Display-Driver)' }
-        $pkg = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Directory -ErrorAction SilentlyContinue |
+        $pkg = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Directory -ErrorAction Ignore |
             Where-Object { $_.Name -like 'VirtualDrivers.Virtual-Display-Driver*' } | Select-Object -First 1
         if (-not $pkg) {
             $out = & winget.exe install --id VirtualDrivers.Virtual-Display-Driver -e --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-String
@@ -192,7 +216,7 @@ if (-not $Phase2) {
         $drv = Join-Path $pkg.FullName 'SignedDrivers\x86\VDD'      # the folder name says x86; the INF is NTamd64
         $inf = Join-Path $drv 'MttVDD.inf'
         if (-not (Test-Path $inf)) { throw "no MttVDD.inf under $drv" }
-        if (Get-PnpDevice -Class Display -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -eq 'Virtual Display Driver' -and $_.Status -eq 'OK' }) { return 'already installed' }
+        if (Get-PnpDevice -Class Display -ErrorAction Ignore | Where-Object { $_.FriendlyName -eq 'Virtual Display Driver' -and $_.Status -eq 'OK' }) { return 'already installed' }
         New-Item -ItemType Directory -Path 'C:\VirtualDisplayDriver' -Force | Out-Null
         Copy-Item (Join-Path $pkg.FullName 'Dependencies\vdd_settings.xml') 'C:\VirtualDisplayDriver\vdd_settings.xml' -Force
         $sig = Get-AuthenticodeSignature (Join-Path $drv 'mttvdd.cat')
@@ -202,12 +226,12 @@ if (-not $Phase2) {
         $out = & pnputil.exe /add-driver $inf /install 2>&1 | Out-String
         if ($LASTEXITCODE -notin 0, 259) { throw "pnputil exited $LASTEXITCODE`: $($out.Trim())" }
         $hwid = (Select-String -Path $inf -Pattern '(Root\\[A-Za-z0-9_]+)' | Select-Object -First 1).Matches[0].Groups[1].Value
-        $node = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -contains $hwid }
+        $node = Get-PnpDevice -ErrorAction Ignore | Where-Object { $_.HardwareID -contains $hwid }
         if (-not $node) {
             & (Join-Path $pkg.FullName 'Dependencies\devcon.exe') install $inf $hwid 2>&1 | Out-Null
         }
         Start-Sleep -Seconds 8
-        $mon = Get-PnpDevice -Class Monitor -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'VDD' -and $_.Status -eq 'OK' }
+        $mon = Get-PnpDevice -Class Monitor -ErrorAction Ignore | Where-Object { $_.FriendlyName -match 'VDD' -and $_.Status -eq 'OK' }
         if (-not $mon) { throw 'the driver installed but no VDD monitor appeared' }
         "installed; signer $($sig.SignerCertificate.Subject); monitor $($mon.FriendlyName)"
     }
