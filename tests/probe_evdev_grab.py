@@ -17,6 +17,10 @@ The optional ``--real-mouse`` check only opens and grabs the given node for
 Requirements: X11 session with ``xdotool``, write access to ``/dev/uinput``,
 and read access to mouse-class event nodes (``sudo usermod -aG input $USER``,
 then log out and back in). See docs/vision/LINUX_PROBE_PLAN.md.
+
+Exit codes: 0 pass, 1 a finding, 2 a requirement of this machine is unmet
+(not Linux, no X11 DISPLAY, event node not readable), which
+``tests/run_linux_validation.sh`` reports as a gate rather than a failure.
 """
 from __future__ import annotations
 
@@ -90,9 +94,9 @@ def main() -> int:
     parser.add_argument("--real-mouse", metavar="EVENT_NODE", help="also grab+release this real mouse node for 0.2 s")
     args = parser.parse_args()
     if not sys.platform.startswith("linux"):
-        print("Linux only."); return 1
+        print("Linux only."); return 2
     if not os.environ.get("DISPLAY"):
-        print("Needs an X11 DISPLAY (xdotool reads the pointer position)."); return 1
+        print("Needs an X11 DISPLAY (xdotool reads the pointer position)."); return 2
 
     ufd, node = create_virtual_mouse()
     print(f"virtual mouse: {node}; waiting for the X server to hotplug it")

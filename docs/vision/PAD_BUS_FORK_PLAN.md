@@ -652,6 +652,22 @@ serial, `%02d`; three test serials from today are there: 12345, 2147483647
 and -1). So the client keeps serials in 1 to 16 and walks them like
 ViGEmClient does; the "random serial" in section 6 is withdrawn.
 
+**Finding 4 (2026-09-14), a fresh pad reads stale stick values.** Seen while
+building the network pad (`netpad/`), then reproduced with `X360Pad` alone:
+three plug, neutral `update`, read cycles each read, through
+`XInputGetState` on slot 0, LX -3356, LY -1869, RX -3255, RY -848 (about
+-0.10, -0.06, -0.10, -0.03) with packet number 1, identical every time, and a
+second all-zero `update` did not clear it (the packet number stayed 1). The
+first report that differs from all zeros replaces them, and a return to zero
+after that reads 0. So a new pad shows a small left-and-down deflection on
+both sticks until something moves. Every game measured has a deadzone above
+it (Elden Ring's is the lowest, at or below 0.20), which is why nothing has
+shown it, but it applies to the app's own ViGEm pad too. Where the values come
+from (XInput's slot state or the bus's child) is not known. A plausible fix, a
+one-count report followed by zero at plug time, is not made: it is a
+`padbus_client.py` change, so it wants the bus probe and the shaping probe
+around it.
+
 **Not done, on purpose:** the user-mode failsafe (section 15, question 6)
 and the SetupDi enumeration the plan specified (cfgmgr32 does the same job).
 `request_notification` and `user_index` exist for the harness and the probe;

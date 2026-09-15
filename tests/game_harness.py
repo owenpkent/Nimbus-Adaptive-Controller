@@ -1214,6 +1214,182 @@ class PadActuator:
             self.pad = None
 
 
+def _free_port(kind: int) -> int:
+    import socket
+    s = socket.socket(socket.AF_INET, kind)
+    try:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+    finally:
+        s.close()
+
+
+class NetpadActuator:
+    """
+    The pad reaches the game through netpad (``docs/vision/SEPARATE_GAME_MACHINE.md``
+    section 10): a ``NetpadSender`` in this process, ticked by its own 120 Hz
+    loop thread (standing in for the app's loop), and the receiver as a
+    separate process that owns the ViGEm pad the game reads, over UDP.
+
+    What it adds over :class:`PadActuator` is the whole netpad path: packets,
+    HMAC, the receiver's watchdog, press counters and a second process whose
+    scheduling is its own. What it does not add is a network: both ends are on
+    this machine (loopback), because the game has to run here.
+
+    Built before the game launches, like the pad actuator, and it waits until
+    the receiver's pad is plugged: Source looks for pads only at start-up.
+    ``freeze`` stops the loop ticking (a hung app) and ``stop_session`` /
+    ``start_session`` are the explicit Stop, for the netpad checks.
+    """
+
+    name = "netpad"
+
+    def __init__(self, log_path: Optional[str] = None) -> None:
+        import tempfile
+        from netpad import protocol as NP
+        self.NP = NP
+        self._dir = tempfile.mkdtemp(prefix="nimbus-netpad-")
+        self.key_path = os.path.join(self._dir, "netpad.key")
+        key = NP.write_key(self.key_path)
+        import socket
+        self.port = _free_port(socket.SOCK_DGRAM)
+        self.status_port = _free_port(socket.SOCK_STREAM)
+        self.log_path = log_path or os.path.join(tempfile.gettempdir(), "nimbus-netpad-receiver.log")
+        # The base interpreter rather than the venv's launcher, so the handle is
+        # the receiver itself; it needs only the standard library and src/padbus_client.py.
+        exe = getattr(sys, "_base_executable", None) or sys.executable
+        env = dict(os.environ)
+        env["PYTHONPATH"] = REPO + os.pathsep + env.get("PYTHONPATH", "")
+        self._log = open(self.log_path, "w", encoding="utf-8")
+        self.proc = subprocess.Popen(
+            [exe, "-u", "-m", "netpad.receiver", "run", "--key", self.key_path, "--bind", "127.0.0.1",
+             "--port", str(self.port), "--status-port", str(self.status_port), "--sink", "vigem",
+             "--exit-on-stdin-eof"],
+            cwd=REPO, env=env, stdin=subprocess.PIPE, stdout=self._log, stderr=subprocess.STDOUT)
+        self.sender = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._frozen = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self.last_sent: Dict[str, Any] = {}
+        self.loop_gaps_ms: List[float] = []
+        try:
+            if not self._wait(lambda: self.status() is not None, 10.0):
+                raise RuntimeError(f"the receiver did not start; see {self.log_path}")
+            self.sender = NP.NetpadSender(key, ("127.0.0.1", self.port))
+            self._thread = threading.Thread(target=self._loop, daemon=True, name="netpad-loop")
+            self._thread.start()
+            self.start_session()
+            if not self._wait(lambda: bool((self.status() or {}).get("pad_open")), 10.0):
+                raise RuntimeError(f"the receiver never plugged its pad; see {self.log_path}")
+        except Exception:
+            self.close()
+            raise
+        print(f"[harness] netpad: receiver pid {self.proc.pid} on udp 127.0.0.1:{self.port}, pad plugged, "
+              f"key {NP.key_fingerprint(key)}, log {self.log_path}", flush=True)
+
+    @staticmethod
+    def _wait(cond: Callable[[], bool], seconds: float) -> bool:
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if cond():
+                return True
+            time.sleep(0.05)
+        return cond()
+
+    def _loop(self) -> None:
+        period = 1.0 / 120
+        nxt = time.monotonic()
+        last = nxt
+        while not self._stop.is_set():
+            now = time.monotonic()
+            if not self._frozen.is_set():
+                gap = (now - last) * 1000.0
+                if gap > 50.0:
+                    self.loop_gaps_ms.append(round(gap, 1))
+                with self._lock:
+                    if self.sender is not None:
+                        self.sender.tick()
+                last = now
+            else:
+                last = now
+            nxt += period
+            if nxt < now:
+                nxt = now + period
+            time.sleep(max(0.0, nxt - time.monotonic()))
+
+    def status(self) -> Optional[Dict[str, Any]]:
+        import urllib.request
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.status_port}/status", timeout=1.0) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except Exception:
+            return None
+
+    def start_session(self, wait_s: float = 5.0) -> bool:
+        with self._lock:
+            self.sender.start()
+        return self._wait(lambda: self.sender.status == "live" and bool((self.status() or {}).get("live")), wait_s)
+
+    def stop_session(self) -> None:
+        with self._lock:
+            self.sender.stop()
+        self.last_sent = {}
+
+    def freeze(self, on: bool) -> None:
+        (self._frozen.set if on else self._frozen.clear)()
+
+    def prepare(self, env: "GameEnv") -> Optional[str]:
+        return None
+
+    def apply(self, action: Dict[str, Any]) -> None:
+        lx = _clamp(action.get("lx", 0.0), -1, 1)
+        ly = _clamp(action.get("ly", 0.0), -1, 1)
+        rx = _clamp(action.get("rx", 0.0), -1, 1)
+        ry = _clamp(action.get("ry", 0.0), -1, 1)
+        lt = _clamp(action.get("lt", 0.0), 0, 1)
+        rt = _clamp(action.get("rt", 0.0), 0, 1)
+        want = {int(b) for b in action.get("buttons", [])}
+        with self._lock:
+            s = self.sender
+            s.set_left_stick(lx, ly)
+            s.set_right_stick(rx, ry)
+            s.set_left_trigger(lt)
+            s.set_right_trigger(rt)
+            for b in range(1, 15):
+                s.set_button(b, b in want)
+        self.last_sent = {"left_x": lx, "left_y": ly, "right_x": rx, "right_y": ry,
+                          "left_trigger": lt, "right_trigger": rt, "buttons": sorted(want)}
+
+    def release(self) -> None:
+        self.apply({})
+
+    def sent(self) -> Dict[str, Any]:
+        return dict(self.last_sent)
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+        if self.sender is not None:
+            try:
+                with self._lock:
+                    self.sender.close()
+            except Exception:
+                pass
+        if self.proc.poll() is None:
+            try:
+                self.proc.stdin.close()          # the receiver's cue to unplug and exit
+                self.proc.wait(timeout=5.0)
+            except Exception:
+                self.proc.kill()
+        try:
+            self._log.close()
+        except Exception:
+            pass
+        shutil.rmtree(self._dir, ignore_errors=True)
+
+
 class NimbusActuator:
     """The real Nimbus QML app in-process, its widgets driven by synthesized pointer events.
 

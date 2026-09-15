@@ -146,6 +146,8 @@ An actuator takes an action, a dictionary with any of `lx`, `ly`, `rx`, `ry` (mi
 
 **`nimbus`.** The real QML app in-process, the way `tests/probe_stick_shaping_windows.py` runs it: the bridge, the QML engine and the profile are the real ones, the pointer is synthesized `QMouseEvent`s on the joystick and button widgets, and the ViGEm pad is the bridge's own. A stick action becomes a drag of `value * travel` pixels from the widget's centre (`travel` is the widget's `travel_px`, else its drawn radius), so the whole shaping chain runs (deadzone, curve, anti-deadzone floor, extremity cap); the actuator reports what the bridge actually sent from the ViGEm interface's `current_values` beside what the game did, and the expected values come from the bridge's own resolved parameters through `shape_magnitude`, never from a number in this document. The app is placed beside the game window, never over it. By default the run uses a throwaway copy of the bundled `adaptive_platform_2` profile written into the user profiles folder and removed afterwards, so the result does not depend on what the user has done to their own copy; `--profile <id>` runs an existing profile instead. When several widgets could take the press (the user's copy of the bundled profile has two overlapping left sticks), the actuator picks the topmost one whose centre nothing later in the layout covers, because that is where a real press would land. `controller_config.json` is restored afterwards.
 
+**`netpad`** (2026-09-14). The pad reaches the game through the network pad prototype of [Separate Game Machine](SEPARATE_GAME_MACHINE.md) section 10: a `NetpadSender` in the harness, ticked by its own 120 Hz loop thread standing in for the app's loop, and `netpad.receiver` as a separate process that owns the ViGEm pad, over UDP loopback. It runs every pad check, so the recipe's pad bands compare the two directly, and then its own: the session survived the run (NP1), a frozen loop stops the camera mid-turn and resumes it (NP2), an explicit Stop does the same (NP3), and whether the game reads a pad the receiver destroyed and re-created (NP4, a finding). Built before the launch like the pad actuator, and it waits for the receiver's pad to be plugged. It adds the whole netpad path and a second process; it does not add a network, because the game has to run on this machine.
+
 A button a `ready_sequence` asks for that the profile draws no widget for is pressed straight at the bridge (`ControllerBridge.setButton`) and the run says so on the line it happens. The bundled layout has A, B, X, Y and the two bumpers; Halo Wars needs the d-pad to walk the main menu and Start to begin the match, and before 2026-09-09 those presses were dropped in silence, which left the game sitting in the campaign menu while the in-world checks measured it (section 8). A menu walk is how the game is reached and not part of what is measured, so driving it at the bridge is honest; every check that produces a number still drives a real widget through the whole shaping chain.
 
 ### 4.5 The environment
@@ -664,6 +666,32 @@ Five things the runs taught, all of them now in the checks or the code:
 The BattlEye recipe is not the same run, and was run anyway: `--game arma3 --actuator nimbus --assist`, 22/22. `src/spectator/policy.py` refuses target-aware assistance whenever an anti-cheat process is present, so with BattlEye's service up the T0 gate refuses three times over (the title is a harness entry, an anti-cheat is running, and the harness's own entry is refused for the same reason), the runner prints that this is the control, and nothing target-aware executes at all. That refusal *is* the control here: it is section 5's rule rather than a measurement, and it is what the plan's exit criterion for this phase becomes once the rule exists. The N and P series ran the same as ever beside it, so the pad-level comparison with and without BattlEye stands from 2026-09-09 and is unchanged by any of this.
 
 One flake worth recording: one run in six died in `env.step`'s screen grab with "the Qt thread did not answer in time", before any assist check ran. Nothing in this work touches that path; `grabWindow` needs the Qt thread and the game had it.
+
+### 2026-09-14, dev machine, Left 4 Dead 2, `c1m2_streets` safe room, windowed 1280x720, pad then netpad actuator
+
+The first real game through the network pad (`--actuator netpad`, section 4.4), run back to back with the direct pad as the same-day baseline: Hyper-V has been on since 2026-09-13, so the older rows are not the comparison. Pad 17/17, netpad 22/22, every expect band met by both.
+
+| Measure | pad | netpad |
+|---|---|---|
+| Window found, ready | 16 s, 44 s | 2 s, 28 s (a warm start; a new window, the first run had killed the game) |
+| Deadzone (sweep) | still at 0.26, moved at 0.28 | the same |
+| Right stick 0.28, 0.30 | -1.49, -3.51 deg/s | -1.50, -3.53 deg/s |
+| Right stick 0.40 (band -13.8 within 2.1) | -13.74 | -13.70 |
+| Right stick 0.60 (band -34.2 within 5.1) | -33.72 | -34.36 |
+| Right stick 0.80 | -54.74 | -54.61 |
+| Right stick 1.00 (the acceleration ramp) | -474.0 | -498.9 |
+| Left at 0.60, ratio to right | +33.66, 1.00 | +33.71, 0.98 |
+| Pitch, 0.60 held (band -21.3 within 3.2) | -20.92 | -21.21 |
+| Walk, full stick 1 s (band 199.7 within 39.9) | 200.0 | 199.7 |
+| LB echo | 31 ms | 31 ms |
+| First pose sample that moved (a bound) | 125 ms | 78 ms |
+| G12 yaw at 0.60 for 0.10, 0.25, 0.50, 1.00 s | -3.2, -8.4, -16.4, -33.2 | -3.0, -8.2, -16.2, -33.2 |
+| G12 yaw at 1.00 | -8.3, -37.4, -123.2, -443.4 | -8.4, -38.1, -127.2, -439.1 |
+| G12 walk at 0.25, 0.5, 1.0 s | 62.9, 112.9, 199.7 | 54.3, 120.1, 200.0 |
+
+The two latency bounds are one pose sample apart (each read is about 47 ms), not netpad being faster, and the full-deflection and short-walk rows vary as much between two pad runs. On everything the game measures, the network pad is the direct pad.
+
+Netpad's own checks: **NP1** one session for the whole run, 3,039 packets, no timeout, failed pad write or rejected packet, and the sender's loop thread stalled past 50 ms once (63 ms, under the 150 ms watchdog) while the harness grabbed frames. **NP2** turning at 0.60 (-16.5 degrees in 0.6 s), then the loop frozen: +0.00 degrees over 0.6 s measured from 0.35 s after the freeze, one receiver timeout, and -22.4 degrees in 0.8 s once the loop resumed. **NP3** explicit Stop mid-turn: +0.00 degrees, a new session live within a second, -23.5 degrees after. **NP4, the finding:** a 2.6 s freeze destroyed the pad and the resumed session re-created it, and **Left 4 Dead 2 did not read the re-created pad** (0.0 degrees in 1 s at 0.60). The launch-order rule of section 4.2 applies to a pad that comes back as much as to one that arrives late, so on a Source game any interruption past the 2 s destroy leaves the player without a controller until the game restarts. Receiver totals at the end: 3,593 packets, 4 sessions (the run, NP2's resume, NP3's new session, NP4's re-creation), 2 timeouts, 1 end.
 
 ## Related Documents
 

@@ -72,6 +72,22 @@ nimbus
         15 percent or 5 degrees
     P4  walk 100 units: within 20 percent or 10 units
     P5  stop: a long walk cut short releases the stick and the player stops
+netpad
+    The pad reaches the game through netpad (docs/vision/SEPARATE_GAME_MACHINE.md
+    section 10): a sender with its own 120 Hz loop here and the receiver as a
+    separate process owning the ViGEm pad, over UDP loopback. Runs every pad
+    check above (so the recipe's expect bands compare it with the direct pad),
+    then:
+
+    NP0 the session is live and its pad plugged before the game launches
+    NP1 the session stayed live through all of it: one session, no timeout,
+        no failed pad write, no rejected packet
+    NP2 the loop freezes mid-turn: the camera stops while the stick is still
+        commanded, and turns again when the loop resumes (under 2 s, so the
+        pad stays plugged)
+    NP3 explicit Stop mid-turn: the camera stops; a new session turns it again
+    NP4 finding, not a pass condition: a freeze past 2 s destroys the pad and
+        the session re-creates it; does the game read the new pad?
 
 Run (from the repo root, venv with PySide6; ViGEmBus installed;
 Steam able to sign in without a prompt)::
@@ -114,8 +130,8 @@ sys.path.insert(0, os.path.join(REPO, "tests"))
 
 from frame_motion import describe, moving_peak, rot_coherent  # noqa: E402
 from game_harness import (  # noqa: E402
-    FRAMES_DIR, GameEnv, NimbusActuator, PadActuator, load_recipe, on_qt, pose_delta, pose_error, wrap_deg,
-    write_expect, write_reset_pose,
+    FRAMES_DIR, GameEnv, NetpadActuator, NimbusActuator, PadActuator, load_recipe, on_qt, pose_delta, pose_error,
+    wrap_deg, write_expect, write_reset_pose,
 )
 
 DEFAULT_SWEEP = "0.20,0.26,0.28,0.30,0.40,0.60,0.80,1.00"
@@ -1277,6 +1293,132 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
         env.reset()
 
 # ---- drivers -------------------------------------------------------------------
+# ---- netpad --------------------------------------------------------------------
+def _yaw_track(env: GameEnv, seconds: float, last: float) -> tuple:
+    """Sum the wrapped yaw steps over ``seconds`` of pose reads (about 50 ms each)."""
+    total = 0.0
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < seconds:
+        p = env.oracle.pose(timeout=0.3, tries=1)
+        if p:
+            total += wrap_deg(p["ang"][1] - last)
+            last = p["ang"][1]
+    return total, last
+
+
+def netpad_checks(env: GameEnv, act: NetpadActuator) -> None:
+    if not env.oracle.has_pose:
+        record("NP netpad checks", True, "no console oracle, skipped")
+        return
+    st = act.status() or {}
+    stats = st.get("stats", {})
+    bad = {k: stats.get(k, 0) for k in ("timeouts", "sink_errors", "bad_tag", "rate_dropped", "wrong_addr",
+                                        "not_neutral_first", "stale_seq") if stats.get(k, 0)}
+    record("NP1 the session stayed live through the pad checks: one session, no timeout, nothing rejected",
+           stats.get("sessions") == 1 and not bad,
+           f"sessions {stats.get('sessions')}, packets {stats.get('rx')}, "
+           + (f"problems {bad}" if bad else "no timeout, failed write or rejected packet")
+           + f"; loop gaps over 50 ms: {act.loop_gaps_ms or 'none'}")
+
+    speed = 0.6     # about 33 deg/s on Left 4 Dead 2: linear, far from the fold
+    # NP2: the loop freezes mid-turn
+    env.reset()
+    env.front()
+    p = env.oracle.pose()
+    if not p:
+        record("NP2 freeze", False, "no pose")
+        return
+    before = dict((act.status() or {}).get("stats", {}))
+    last = p["ang"][1]
+    act.apply({"rx": speed})
+    turning, last = _yaw_track(env, 0.6, last)
+    act.freeze(True)
+    _, last = _yaw_track(env, 0.35, last)            # the 150 ms watchdog and the game's response
+    frozen, last = _yaw_track(env, 0.6, last)
+    act.freeze(False)
+    resumed, last = _yaw_track(env, 0.8, last)
+    act.release()
+    time.sleep(0.4)
+    after = dict((act.status() or {}).get("stats", {}))
+    timeouts = after.get("timeouts", 0) - before.get("timeouts", 0)
+    record("NP2 the loop freezes mid-turn: the camera stops, and turns again when the loop resumes",
+           abs(turning) > 5.0 and abs(frozen) < 1.0 and abs(resumed) > 10.0 and timeouts == 1,
+           f"turning {turning:+.1f} deg in 0.6 s, frozen {frozen:+.2f} deg in 0.6 s (from 0.35 s after the freeze), "
+           f"resumed {resumed:+.1f} deg in 0.8 s; receiver timeouts {timeouts}")
+    env.reset()
+
+    # NP3: explicit Stop mid-turn, then a new session
+    env.front()
+    p = env.oracle.pose()
+    last = p["ang"][1] if p else 0.0
+    act.apply({"rx": speed})
+    turning, last = _yaw_track(env, 0.6, last)
+    act.stop_session()
+    _, last = _yaw_track(env, 0.25, last)
+    stopped, last = _yaw_track(env, 0.6, last)
+    live = act.start_session(wait_s=1.0)
+    act.apply({"rx": speed})
+    resumed, last = _yaw_track(env, 0.8, last)
+    act.release()
+    time.sleep(0.4)
+    record("NP3 explicit Stop mid-turn: the camera stops; a new session turns it again",
+           abs(turning) > 5.0 and abs(stopped) < 1.0 and live and abs(resumed) > 10.0,
+           f"turning {turning:+.1f}, stopped {stopped:+.2f} deg in 0.6 s, new session live {live}, "
+           f"resumed {resumed:+.1f} deg in 0.8 s")
+    env.reset()
+
+    # NP4: a freeze past 2 s destroys the pad; is a re-created pad read? (finding)
+    act.freeze(True)
+    time.sleep(2.6)
+    plugged_during = bool((act.status() or {}).get("pad_open"))
+    act.freeze(False)
+    back = NetpadActuator._wait(lambda: bool((act.status() or {}).get("pad_open"))
+                                and bool((act.status() or {}).get("live")), 5.0)
+    time.sleep(1.5)
+    env.front()
+    p = env.oracle.pose()
+    last = p["ang"][1] if p else 0.0
+    act.apply({"rx": speed})
+    moved, last = _yaw_track(env, 1.0, last)
+    act.release()
+    time.sleep(0.4)
+    reads = abs(moved) > 5.0
+    record("NP4 finding (not a pass condition): after a freeze past 2 s the pad is destroyed and re-created; "
+           "does the game read the new pad?", not plugged_during and back,
+           f"pad destroyed during the freeze {not plugged_during}, re-created {back}; the game "
+           + ("READS the re-created pad" if reads else "does NOT read the re-created pad")
+           + f" ({moved:+.1f} deg in 1.0 s at {speed})")
+    env.reset()
+
+
+def run_netpad(args: argparse.Namespace, recipe: Dict[str, Any]) -> int:
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication(sys.argv)  # noqa: F841  (the screen grab needs one)
+    try:
+        act = NetpadActuator()    # before the game launches, and it waits for the receiver's pad
+    except Exception as exc:      # noqa: BLE001
+        print(f"no netpad pad: {exc}")
+        return 2
+    record("NP0 the netpad session is live and its pad plugged before the game launches", True,
+           f"receiver pid {act.proc.pid}, udp 127.0.0.1:{act.port}")
+    env = GameEnv(recipe, act, frames_dir=args.frames, skip_top=args.skip_top, save_frames=not args.no_frames)
+    try:
+        if launch_and_ready(env, "G0 launch: the game window appears", "G1 ready: the oracle answers"):
+            pad_checks(env, args)
+            netpad_checks(env, act)
+    except Exception as exc:      # noqa: BLE001
+        traceback.print_exc()
+        record("run crashed", False, f"{type(exc).__name__}: {exc}")
+    finally:
+        env.close(keep_game=args.keep_game)
+        st = act.status()
+        act.close()
+    code = summary(env, args)
+    if st:
+        print(f"[harness] netpad receiver stats: {st.get('stats')}", flush=True)
+    return code
+
+
 def summary(env: Optional[GameEnv], args: argparse.Namespace) -> int:
     failed = [r for r in RESULTS if not r["ok"]]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} checks passed", flush=True)
@@ -1347,7 +1489,7 @@ def run_nimbus(args: argparse.Namespace, recipe: Dict[str, Any]) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--game", default="left4dead2", help="recipe name in tests/games/ or a path to a recipe")
-    ap.add_argument("--actuator", choices=("pad", "nimbus"), default="pad")
+    ap.add_argument("--actuator", choices=("pad", "nimbus", "netpad"), default="pad")
     ap.add_argument("--hold", type=float, default=1.0, help="seconds to hold each stick step")
     ap.add_argument("--sweep", default=DEFAULT_SWEEP, help="right-stick magnitudes for the yaw sweep")
     ap.add_argument("--nudge", type=float, default=1.0, help="nimbus: pixels of drag for the floor check")
@@ -1382,7 +1524,11 @@ def main() -> int:
     recipe = load_recipe(args.game)
     print(f"[harness] {recipe['name']} ({recipe['title']}), oracle {recipe.get('oracle', {}).get('type', 'frame_diff')}, "
           f"actuator {args.actuator}", flush=True)
-    return run_nimbus(args, recipe) if args.actuator == "nimbus" else run_pad(args, recipe)
+    if args.actuator == "nimbus":
+        return run_nimbus(args, recipe)
+    if args.actuator == "netpad":
+        return run_netpad(args, recipe)
+    return run_pad(args, recipe)
 
 
 if __name__ == "__main__":
