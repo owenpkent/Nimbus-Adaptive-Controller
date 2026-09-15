@@ -50,10 +50,31 @@ run() {                      # run <label> <command...>
     echo "=================================================================="
     echo ">>> $label"
     echo "=================================================================="
-    if "$@"; then
+    "$@"
+    local rc=$?
+    if [ "$rc" -eq 0 ]; then
         echo "<<< $label: PASSED"
     else
-        echo "<<< $label: FAILED (exit $?)"
+        echo "<<< $label: FAILED (exit $rc)"
+        FAILED="$FAILED $label"
+    fi
+}
+probe() {                    # probe <label> <command...>: exit 2 means a gate, not a finding
+    local label="$1"; shift
+    echo
+    echo "=================================================================="
+    echo ">>> $label"
+    echo "=================================================================="
+    "$@"
+    local rc=$?
+    if [ "$rc" -eq 0 ]; then
+        echo "<<< $label: PASSED"
+    elif [ "$rc" -eq 2 ]; then
+        echo "<<< $label: GATE (a requirement of this machine is unmet; the reason is printed above)"
+        GATES="$GATES
+  - $label: see its output above for what to set up"
+    else
+        echo "<<< $label: FAILED (exit $rc)"
         FAILED="$FAILED $label"
     fi
 }
@@ -64,19 +85,27 @@ run "fast suite"            $PY tests/run_fast_tests.py
 run "linux stack probe"     $PY -m tests.probe_linux_stack $GRAB
 run "uinput round-trip"     $PY -m tests.test_uinput
 
-# Both of these need a real display and xdotool. A missing tool is a gate, not
-# a finding, so they are skipped with a reason rather than run and failed.
-if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-    echo; echo ">>> evdev grab and always-on-top: GATE (no display; run from a desktop session)"
+# Both of these need an X11 display and xdotool: xdotool reads the pointer
+# through X, and Wayland has no client-settable "above" state. A Wayland
+# session without XWayland has no DISPLAY, which is a gate, not a finding.
+if [ -z "${DISPLAY:-}" ]; then
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        why="Wayland session with no X11 DISPLAY; log in to an X11 session"
+    else
+        why="no display; run from an X11 desktop session"
+    fi
+    echo; echo ">>> evdev grab and always-on-top: GATE ($why)"
     GATES="$GATES
-  - no display: run from a desktop session, X11 preferred"
+  - $why"
 elif ! command -v xdotool >/dev/null 2>&1; then
     echo; echo ">>> evdev grab and always-on-top: GATE (xdotool not installed)"
     GATES="$GATES
   - xdotool missing: sudo apt install xdotool"
 else
-    run "evdev grab probe"  $PY -m tests.probe_evdev_grab
-    run "always on top"     $PY -m tests.probe_always_on_top
+    probe "evdev grab probe"  $PY -m tests.probe_evdev_grab
+    # The fast suite above exports QT_QPA_PLATFORM=offscreen; this probe needs
+    # the real X11 platform, or it refuses to measure.
+    probe "always on top"     env QT_QPA_PLATFORM=xcb $PY -m tests.probe_always_on_top
 fi
 
 echo

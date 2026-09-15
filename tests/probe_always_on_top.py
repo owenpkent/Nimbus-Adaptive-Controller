@@ -29,6 +29,11 @@ written to ``--out`` for inspection.
 With ``--panel-window`` the pixel measure is a before/after diff, which a
 third always-on-top window parked over the panel would flatter; the stacking
 check printed alongside it is the decisive one in that mode.
+
+Exit codes: 0 pass, 3 the panel was covered, 2 a requirement of this session
+is unmet (not Linux, no xdotool, Qt not on xcb, no panel pixels visible),
+which ``tests/run_linux_validation.sh`` reports as a gate rather than a
+failure.
 """
 from __future__ import annotations
 
@@ -169,16 +174,16 @@ def main() -> int:
     args = parser.parse_args()
 
     if not sys.platform.startswith("linux"):
-        print("Linux only."); return 1
+        print("Linux only."); return 2
     if not subprocess.run(["which", "xdotool"], capture_output=True).stdout:
-        print("Needs xdotool (sudo apt install xdotool)."); return 1
+        print("Needs xdotool (sudo apt install xdotool)."); return 2
 
     app = QApplication([])
     if app.platformName() != "xcb":
         print(f"Qt platform is {app.platformName()!r}, not 'xcb'.")
         print("Wayland has no client-settable 'above' state and no root-window grab;")
         print("run this from an X11 session, or set QT_QPA_PLATFORM=xcb.")
-        return 1
+        return 2
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
