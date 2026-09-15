@@ -23,7 +23,10 @@ single-pointer setups unless you have a keyboard to recover with.
     python -m tests.probe_linux_stack
     python -m tests.probe_linux_stack --grab      # adds the E2 failure path
 
-Exit code is 0 when every check passes.
+Exit code is 0 when every check that could run passed. An unmet gate is not
+a failure: the sections that depend on it are skipped with the gate named,
+so a machine that is not set up yet reports what to fix rather than a list
+of FAILs that read like regressions.
 """
 
 import argparse
@@ -37,6 +40,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 PASSES = 0
 FAILS = 0
 SKIPS = 0
+GATES_UNMET = []
+ENV = {}                     # gate name -> met, filled in by section A
 
 
 def check(label, condition, detail=""):
@@ -48,6 +53,26 @@ def check(label, condition, detail=""):
         FAILS += 1
         print(f"  [FAIL] {label}" + (f"  ({detail})" if detail else ""))
     return bool(condition)
+
+
+def gate(label, condition, fix=""):
+    """A precondition of this machine, not a claim about the code.
+
+    Permissions and plugged-in hardware decide these. Reporting them as
+    failures alongside the real checks is what makes a setup problem read as a
+    regression, so they are counted apart and the summary says which kind of
+    trouble the run is in.
+    """
+    global PASSES
+    if condition:
+        PASSES += 1
+        print(f"  [PASS] {label}")
+        return True
+    GATES_UNMET.append((label, fix))
+    print(f"  [GATE] {label}")
+    if fix:
+        print(f"         -> {fix}")
+    return False
 
 
 def skip(label, why):
@@ -71,11 +96,13 @@ def probe_environment():
     from src.mouse_isolation import MOUSE_ISOLATION_AVAILABLE
     check("UINPUT_AVAILABLE", UINPUT_AVAILABLE)
     check("MOUSE_ISOLATION_AVAILABLE", MOUSE_ISOLATION_AVAILABLE)
-    check("/dev/uinput is writable", os.access("/dev/uinput", os.W_OK),
-          "add yourself to the input group or install the udev rule in build_tools/linux/")
+    ENV["uinput"] = gate("/dev/uinput is writable", os.access("/dev/uinput", os.W_OK),
+         "sudo modprobe uinput; install build_tools/linux/60-nimbus-uinput.rules, "
+         "then: sudo udevadm control --reload; sudo udevadm trigger --name-match=uinput")
     readable = [p for p in Path("/dev/input").glob("event*") if os.access(p, os.R_OK)]
-    check("at least one /dev/input/event* is readable", bool(readable),
-          f"{len(readable)} readable")
+    ENV["readable"] = gate("at least one /dev/input/event* is readable", bool(readable),
+         "sudo usermod -aG input \"$USER\", then log out of the graphical session "
+         "entirely and back in; a new shell is not enough. Confirm with: id -nG")
     print(f"    python {sys.version.split()[0]}, uid {os.getuid()}")
     return True
 
@@ -265,8 +292,9 @@ def probe_pointer_classification():
     print()
 
     supported = [d for d in pointers if pointer_support(d)[0]]
-    check("at least one pointer is grabbable", bool(supported),
-          f"{len(supported)} of {len(pointers)}")
+    gate("at least one pointer is grabbable", bool(supported),
+         "plug in a USB mouse. A touchpad-only machine has nothing this reader can "
+         "translate, and declining it is the classifier working, not failing")
 
     absolute = [d for d in pointers if d.get("has_abs") and not d.get("has_rel")]
     if absolute:
@@ -295,6 +323,9 @@ def probe_passthrough_leak(do_grab):
 
     if not do_grab:
         skip("forced grab-failure cleanup", "pass --grab to exercise it")
+        return True
+    if not (ENV.get("uinput") and ENV.get("readable")):
+        skip("forced grab-failure cleanup", "gate unmet: it needs /dev/uinput writable and event nodes readable")
         return True
 
     from src.mouse_isolation import MouseIsolation, list_pointer_devices, pointer_support
@@ -365,16 +396,37 @@ def main():
         print()
         print("Nothing to do: this probe only means anything on Linux.")
         return 0
-    probe_output_backends()
-    probe_pulse_cannot_undo_a_release()
+    if ENV.get("uinput"):
+        probe_output_backends()
+        probe_pulse_cannot_undo_a_release()
+    else:
+        section("B and C. Output back ends and the pulse")
+        skip("sections B and C", "gate unmet: /dev/uinput is not writable, so no pad can be created")
     probe_pointer_classification()
     probe_passthrough_leak(args.grab)
     probe_bridge_dispatch()
 
-    print(f"\n{PASSES}/{PASSES + FAILS} checks passed, {SKIPS} skipped")
+    print(f"\n{PASSES}/{PASSES + FAILS} checks passed, {SKIPS} skipped, "
+          f"{len(GATES_UNMET)} environment gate(s) unmet")
+
+    if GATES_UNMET:
+        print("\nGates are properties of this machine, not of the code. Nothing below")
+        print("is a regression; each one leaves part of the probe unable to run:")
+        for label, fix in GATES_UNMET:
+            print(f"  - {label}")
+            if fix:
+                print(f"      {fix}")
+
     if FAILS:
-        print("\nA failure here is a real finding: it is the first time this code has")
-        print("met a kernel. Report the section and the printed values.")
+        print("\nA FAILED check is a real finding: these are claims about the code,")
+        print("checked against a real kernel. Report the section and the printed")
+        print("values. Do not confuse them with the gates above.")
+    elif GATES_UNMET:
+        print("\nEvery check that could run, passed. Close the gates and re-run to")
+        print("cover the rest.")
+
+    # An unmet gate is not a failure: it means less was checked, not that
+    # something is broken. Only a failed check fails the run.
     return 1 if FAILS else 0
 
 

@@ -43,16 +43,38 @@ PY=./venv/bin/python
 echo "python  : $($PY --version 2>&1)"
 
 FAILED=""
+GATES=""
 run() {                      # run <label> <command...>
     local label="$1"; shift
     echo
     echo "=================================================================="
     echo ">>> $label"
     echo "=================================================================="
-    if "$@"; then
+    "$@"
+    local rc=$?
+    if [ "$rc" -eq 0 ]; then
         echo "<<< $label: PASSED"
     else
-        echo "<<< $label: FAILED (exit $?)"
+        echo "<<< $label: FAILED (exit $rc)"
+        FAILED="$FAILED $label"
+    fi
+}
+probe() {                    # probe <label> <command...>: exit 2 means a gate, not a finding
+    local label="$1"; shift
+    echo
+    echo "=================================================================="
+    echo ">>> $label"
+    echo "=================================================================="
+    "$@"
+    local rc=$?
+    if [ "$rc" -eq 0 ]; then
+        echo "<<< $label: PASSED"
+    elif [ "$rc" -eq 2 ]; then
+        echo "<<< $label: GATE (a requirement of this machine is unmet; the reason is printed above)"
+        GATES="$GATES
+  - $label: see its output above for what to set up"
+    else
+        echo "<<< $label: FAILED (exit $rc)"
         FAILED="$FAILED $label"
     fi
 }
@@ -63,34 +85,57 @@ run "fast suite"            $PY tests/run_fast_tests.py
 run "linux stack probe"     $PY -m tests.probe_linux_stack $GRAB
 run "uinput round-trip"     $PY -m tests.test_uinput
 
-# These two need a real display and extra tooling, so they are best effort.
-if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-    run "evdev grab probe"  $PY -m tests.probe_evdev_grab
-    if command -v xdotool >/dev/null 2>&1; then
-        run "always on top"  $PY -m tests.probe_always_on_top
+# Both of these need an X11 display and xdotool: xdotool reads the pointer
+# through X, and Wayland has no client-settable "above" state. A Wayland
+# session without XWayland has no DISPLAY, which is a gate, not a finding.
+if [ -z "${DISPLAY:-}" ]; then
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        why="Wayland session with no X11 DISPLAY; log in to an X11 session"
     else
-        echo; echo ">>> always on top: SKIPPED (xdotool not installed)"
+        why="no display; run from an X11 desktop session"
     fi
+    echo; echo ">>> evdev grab and always-on-top: GATE ($why)"
+    GATES="$GATES
+  - $why"
+elif ! command -v xdotool >/dev/null 2>&1; then
+    echo; echo ">>> evdev grab and always-on-top: GATE (xdotool not installed)"
+    GATES="$GATES
+  - xdotool missing: sudo apt install xdotool"
 else
-    echo; echo ">>> evdev grab and always-on-top: SKIPPED (no display; run from a desktop session)"
+    probe "evdev grab probe"  $PY -m tests.probe_evdev_grab
+    # The fast suite above exports QT_QPA_PLATFORM=offscreen; this probe needs
+    # the real X11 platform, or it refuses to measure.
+    probe "always on top"     env QT_QPA_PLATFORM=xcb $PY -m tests.probe_always_on_top
 fi
 
 echo
 echo "=================================================================="
+if [ -n "$GATES" ]; then
+    echo "Environment gates (properties of this machine, not of the code):"
+    printf "$GATES
+"
+    echo
+fi
 if [ -n "$FAILED" ]; then
     echo "FAILED:$FAILED"
     echo
-    echo "A failure here is a real finding: this is the first time this code has"
-    echo "met a kernel. Paste this whole log back rather than trying to fix it."
+    echo "A failed stage is a real finding: these are claims about the code, checked"
+    echo "against a real kernel. Paste this whole log back rather than trying to fix"
+    echo "it, and do not confuse it with the gates above, which only mean less ran."
 else
     echo "Everything that could run, passed."
+    [ -n "$GATES" ] && echo "Close the gates above and re-run to cover the rest."
 fi
 [ -w /dev/uinput ] || cat <<'NOTE'
 
 /dev/uinput was not writable, so the uinput checks could not mean much. Fix:
     sudo cp build_tools/linux/60-nimbus-uinput.rules /etc/udev/rules.d/
-    sudo udevadm control --reload-rules && sudo udevadm trigger
-    sudo usermod -aG input "$USER"     # then log out and back in
+    sudo udevadm control --reload
+    sudo udevadm trigger --name-match=uinput
+    sudo udevadm trigger --subsystem-match=input
+    sudo usermod -aG input "$USER"
+Then log out of the graphical session entirely and back in. A new shell is not
+enough, and neither is newgrp for the desktop session; confirm with: id -nG
 Do not work around it by running this script as root: that tests something
 other than what a user will actually run.
 NOTE
