@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import math
 import time
+import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
@@ -77,10 +78,13 @@ class PrimitiveRunner(QObject):
         self._touched_buttons: set = set()
         self.last_plan: Dict[str, float] = {}
         self._loop: Optional[Callable[[], None]] = None
-        self._user_ref: Optional[Tuple[float, float]] = None
+        self._user_refs: Dict[str, Tuple[float, float]] = {}
         self._user_cancel = False
         self._cancel_px = 0.0
         self.last_look: Dict[str, Any] = {}
+        #: Why the last primitive ended: ``done``, ``error``, ``settled``, ``timeout``,
+        #: ``lost``, ``cancelled``, ``user`` or ``stopped``.
+        self.last_reason = ""
 
     # ----- configuration -----
     @property
@@ -195,7 +199,7 @@ class PrimitiveRunner(QObject):
             return None
         sel = selector if selector is not None else TargetSelector(fov_px=max(self._frame_span(source), 240.0))
         servo.reset()
-        self._user_ref = None
+        self._user_refs = {}
         self._user_cancel = False
         self._cancel_px = max(0.0, float(cancel_px))
         samples: List[Dict[str, float]] = []
@@ -256,7 +260,7 @@ class PrimitiveRunner(QObject):
         self._t0 = time.monotonic()
         self._loop = tick
         self.started.emit(name)
-        tick()
+        self._advance()   # the first tick, through the same guard as every later one
         return dict(self.last_plan)
 
     @staticmethod
@@ -274,15 +278,30 @@ class PrimitiveRunner(QObject):
         """Whether a running primitive hands control back on the user's own stick motion."""
         return self._loop is not None and self._cancel_px > 0.0
 
-    def note_user_stick(self, x_px: float, y_px: float) -> bool:
+    def note_user_stick(self, x_px: float, y_px: float, key: str = "",
+                        start_px: Tuple[float, float] = (0.0, 0.0)) -> bool:
         """Tell the runner where the user's own stick is, in widget pixels.
 
         The bridge calls this from ``setStickInput`` while a closed-loop
-        primitive runs, before it drives the stick itself. The first sample
-        is the reference; a move of more than ``cancel_px`` from it cancels
-        the primitive on the spot, so the axes are released before the
-        user's own vector is sent and the driver ends up holding what the
-        user commanded, not what the loop last asked for.
+        primitive runs, before it drives the stick itself. Each stick is
+        measured against where that stick was when the loop started, which
+        the bridge passes as ``start_px`` with the stick's first sample: a
+        released stick is ``(0, 0)``, so a press that lands off centre is
+        already a move. A move of more than ``cancel_px`` cancels the
+        primitive on the spot, so the axes are released before the user's
+        own vector is sent and the driver ends up holding what the user
+        commanded, not what the loop last asked for.
+
+        Parameters
+        ----------
+        x_px, y_px : float
+            The stick's position now.
+        key : str
+            Which stick, normally the widget id. Every stick has its own
+            reference, so one stick is never measured against another.
+        start_px : tuple of float
+            Where this stick was when the loop started. Only read on the
+            first sample for ``key``.
 
         Returns
         -------
@@ -291,11 +310,11 @@ class PrimitiveRunner(QObject):
         """
         if not self.watching_user or self._user_cancel:
             return False
-        point = (float(x_px), float(y_px))
-        if self._user_ref is None:
-            self._user_ref = point
-            return False
-        if math.hypot(point[0] - self._user_ref[0], point[1] - self._user_ref[1]) <= self._cancel_px:
+        ref = self._user_refs.get(key)
+        if ref is None:
+            ref = (float(start_px[0]), float(start_px[1]))
+            self._user_refs[key] = ref
+        if math.hypot(float(x_px) - ref[0], float(y_px) - ref[1]) <= self._cancel_px:
             return False
         self._user_cancel = True
         self._finish(False, "user")
@@ -341,12 +360,13 @@ class PrimitiveRunner(QObject):
         self._timer.stop()
         self._steps = []
         self._loop = None
-        self._user_ref = None
+        self._user_refs = {}
         self._release_all()
         if self.last_look and self.last_look.get("reason") == "running":
             self.last_look["reason"] = reason
             self.last_look["settled"] = bool(self.last_look.get("settled"))
         self._name = ""
+        self.last_reason = reason
         self.finished.emit(name, bool(completed))
 
     def _run(self, name: str, steps: List[Tuple[float, Callable[[], None]]]) -> None:
@@ -360,7 +380,13 @@ class PrimitiveRunner(QObject):
 
     def _advance(self) -> None:
         if self._loop is not None:
-            self._loop()
+            try:
+                self._loop()
+            except Exception:
+                # A source, selector or servo that raises must not leave the
+                # loop's last command held with nothing left to release it.
+                traceback.print_exc()
+                self._finish(False, "error")
             return
         # Run every step whose time has come, then arm the timer for the next
         # one. Steps are relative to the start, so timer drift does not add up.
@@ -376,8 +402,10 @@ class PrimitiveRunner(QObject):
             except Exception:
                 self._release_all()
                 name, self._name = self._name, ""
+                self.last_reason = "error"
                 self.finished.emit(name, False)
                 return
         self._release_all()
         name, self._name = self._name, ""
+        self.last_reason = "done"
         self.finished.emit(name, True)

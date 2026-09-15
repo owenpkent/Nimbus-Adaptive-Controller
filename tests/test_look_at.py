@@ -315,5 +315,89 @@ check("a target on screen with nothing asked for produces no output at all",
 check("look_at refuses without a source or a servo",
       idle.look_at(None, None) is None and idle.look_at(source, None) is None)
 
+print("A source that raises mid-snap")
+game = FakeGame(bearing_deg=25.0)
+runner = PrimitiveRunner(game.set_axis, game.set_button)
+inner = ScriptTargetSource(game.line, (WIDTH, HEIGHT))
+
+
+class BrokenSource:
+    """Serves real frames, then raises, the way a clipboard read can."""
+    size_px = (WIDTH, HEIGHT)
+
+    def __init__(self) -> None:
+        self.polls = 0
+
+    def poll(self):
+        self.polls += 1
+        if self.polls > 5:
+            raise OSError("clipboard went away (planted by the test)")
+        return inner.poll()
+
+
+done = {}
+runner.finished.connect(lambda n, ok: done.setdefault("finished", (n, ok)))
+runner.look_at(BrokenSource(), Servo(RATES, FOCAL, dead_time=DEAD_TIME, ceiling=0.95), max_hold=2.0,
+               selector=TargetSelector(fov_px=WIDTH))
+run_until(done, 2.0)
+check("an exception inside the loop ends the primitive, not completed",
+      done.get("finished") == ("look_at", False) and runner.last_reason == "error", runner.last_reason)
+check("with the axes released", game.axis_now("rx") == 0.0 and game.axis_now("ry") == 0.0)
+check("and the runner free for the next primitive", not runner.busy)
+
+
+class FirstTickBroken:
+    size_px = (WIDTH, HEIGHT)
+
+    def poll(self):
+        raise OSError("broken from the start (planted by the test)")
+
+
+game = FakeGame(bearing_deg=25.0)
+runner = PrimitiveRunner(game.set_axis, game.set_button)
+runner.look_at(FirstTickBroken(), Servo(RATES, FOCAL, dead_time=DEAD_TIME, ceiling=0.95), max_hold=2.0,
+               selector=TargetSelector(fov_px=WIDTH))
+check("an exception on the very first tick is caught the same way",
+      not runner.busy and runner.last_reason == "error", runner.last_reason)
+
+print("Whose stick moved, and from where")
+game = FakeGame(bearing_deg=25.0)
+runner = PrimitiveRunner(game.set_axis, game.set_button)
+source = ScriptTargetSource(game.line, (WIDTH, HEIGHT))
+runner.look_at(source, Servo(RATES, FOCAL, dead_time=DEAD_TIME, ceiling=0.95), max_hold=2.0, cancel_px=6.0,
+               selector=TargetSelector(fov_px=WIDTH))
+check("a press that lands off centre is a move, even as the first sample",
+      runner.note_user_stick(60.0, 0.0, key="right") is True and runner.last_reason == "user",
+      runner.last_reason)
+check("and it released the axes", game.axis_now("rx") == 0.0)
+
+game = FakeGame(bearing_deg=25.0)
+runner = PrimitiveRunner(game.set_axis, game.set_button)
+source = ScriptTargetSource(game.line, (WIDTH, HEIGHT))
+runner.look_at(source, Servo(RATES, FOCAL, dead_time=DEAD_TIME, ceiling=0.95), max_hold=2.0, cancel_px=6.0,
+               selector=TargetSelector(fov_px=WIDTH))
+held = runner.note_user_stick(82.0, 0.0, key="left", start_px=(80.0, 0.0))
+nudge = runner.note_user_stick(2.0, 0.0, key="right")
+check("a stick already held when the loop started is measured from where it was",
+      held is False and runner.busy)
+check("and one stick is never measured against another", nudge is False and runner.busy)
+check("the held stick still cancels once it really moves",
+      runner.note_user_stick(95.0, 0.0, key="left") is True and runner.last_reason == "user")
+
+print("Why it ended")
+game = FakeGame(bearing_deg=30.0)
+runner = PrimitiveRunner(game.set_axis, game.set_button)
+runner.look_at(ScriptTargetSource(game.line, (WIDTH, HEIGHT)),
+               Servo(RATES, FOCAL, dead_time=DEAD_TIME, ceiling=0.95), max_hold=2.0,
+               selector=TargetSelector(fov_px=WIDTH))
+runner.stop()
+check("a stop is reported as stopped, which the bridge reads to leave neutral",
+      runner.last_reason == "stopped", runner.last_reason)
+done = {}
+runner.finished.connect(lambda n, ok: done.setdefault("finished", (n, ok)))
+runner.press(1, hold=0.03)
+run_until(done, 1.0)
+check("a timed primitive that ran to the end is reported as done", runner.last_reason == "done", runner.last_reason)
+
 print(f"\n{PASSES} passed, {FAILS} failed")
 sys.exit(1 if FAILS else 0)

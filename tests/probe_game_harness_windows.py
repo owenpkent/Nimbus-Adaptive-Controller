@@ -999,7 +999,9 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
         if not oracle.spawn_target(bearing, range_m):
             continue
         seen = oracle.target()
-        if not seen or abs(seen["bearing"]) < 0.5:
+        # A unit placed but not drawn (the view pitched away) comes back with
+        # no screen position; skip that bearing rather than crash the series.
+        if not seen or not seen.get("visible") or seen.get("sx") is None or abs(seen["bearing"]) < 0.5:
             continue
         dx = (seen["sx"] - 0.5) * env.w
         fits.append(dx / math.tan(math.radians(seen["bearing"])))
@@ -1048,7 +1050,8 @@ def assist_checks(env: GameEnv, act: NimbusActuator, args: argparse.Namespace) -
         on_qt(lambda: act.bridge.setAxis("ry", 0.0))
         time.sleep(0.4)
         after_pitch = oracle.target()
-        if before_pitch and after_pitch:
+        if (before_pitch and after_pitch and before_pitch.get("sy") is not None
+                and after_pitch.get("sy") is not None):
             d_el = after_pitch["elevation"] - before_pitch["elevation"]
             d_sy = after_pitch["sy"] - before_pitch["sy"]
             flat = abs(d_sy * env.h / math.tan(math.radians(abs(d_el)))) if abs(d_el) > 0.2 else 0.0

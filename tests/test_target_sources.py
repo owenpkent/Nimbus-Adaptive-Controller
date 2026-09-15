@@ -91,7 +91,7 @@ check("which is a different frame from the one before", empty is not frame)
 channel.text = pose_line(102.0)
 again = source.poll()
 check("the same tick is the same frame, with its original capture time", again is empty)
-time.sleep(0.06)
+time.sleep(0.12)   # well past the check: the Windows clock moves in steps of about 15 ms
 check("so it ages", again.age() >= 0.05, f"{again.age() * 1000:.0f} ms old")
 channel.text = pose_line(103.0, "off,-31.2,-18.4,30.0")
 gone = source.poll()

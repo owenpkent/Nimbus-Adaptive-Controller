@@ -273,6 +273,31 @@ ApplicationWindow {
         self.config.switch_profile.assert_called_once_with("test")
         self.assertEqual(notifications, ["test"])
 
+    def test_a_primitive_ending_gives_back_a_held_stick_but_a_stop_leaves_neutral(self):
+        runner = self.bridge.get_spectator()
+        w = {"id": "rs", "type": "joystick", "mapping": {"axis_x": "rx", "axis_y": "ry"}}
+        self.bridge._widget_shaping = {"rs": w}
+        self.bridge._last_raw = {"rs": (0.5, 0.0)}
+        with patch.object(self.bridge, "_drive_stick") as drive:
+            runner.last_reason = "settled"
+            runner.finished.emit("look_at", True)
+            drive.assert_called_once_with("rs", w, 0.5, 0.0, advance_filter=False)
+            drive.reset_mock()
+            runner.last_reason = "stopped"
+            runner.finished.emit("look_at", False)
+            drive.assert_not_called()
+
+    def test_user_stick_is_measured_from_where_that_widget_was(self):
+        runner = Mock(watching_user=True)
+        self.bridge._spectator = runner
+        self.bridge._widget_shaping = {"rs": {"id": "rs", "travel_px": 100}}
+        with patch.object(self.bridge, "_drive_stick"):
+            self.bridge.setStickInput("rs", 0.25, 0.0)
+            self.bridge.setStickInput("rs", 0.75, 0.0)
+        first, second = runner.note_user_stick.call_args_list
+        self.assertEqual(first, call(25.0, 0.0, key="rs", start_px=(0.0, 0.0)))
+        self.assertEqual(second, call(75.0, 0.0, key="rs", start_px=(25.0, 0.0)))
+
     def test_full_game_mode_cannot_bypass_injected_factory(self):
         from src import bridge as bridge_module
         self.output.vigem = None
