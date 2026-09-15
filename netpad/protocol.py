@@ -14,7 +14,10 @@ Values chosen by the project owner; each is one constant below.
 - Keepalive at 60 Hz. The pad goes neutral when no fresh, authenticated
   packet has arrived for 150 ms, and is destroyed after 2 s with no live
   session. At most 500 packets per second per session are accepted; the
-  excess is dropped.
+  excess is dropped. Admission is spread evenly (see ``RATE_BURST``): no
+  one-second span admits more than 500, and a sender over the cap still gets
+  a packet through every few milliseconds, so the watchdog never mistakes a
+  fast sender for a dead one.
 - Authentication by a shared 256-bit key file, copied to the sender by hand.
   Each session starts with a nonce handshake that derives a session key, and
   every packet carries an HMAC-SHA256 tag (truncated to 128 bits). PIN
@@ -120,6 +123,19 @@ PENDING_TTL_S = 2.0
 MAX_PENDING = 8
 CLOSED_TTL_S = 10.0
 REPLY_CAP_PER_S = 20
+#: The rate cap is a token bucket, not a calendar second. A fixed window let a
+#: sender over the cap spend its 500 early and then dropped everything,
+#: keepalives included, for the rest of that second, which the 150 ms
+#: watchdog reads as a dead sender. The bucket holds RATE_BURST packets and
+#: refills at RATE_CAP_PER_S - RATE_BURST a second, so no one-second span can
+#: admit more than RATE_CAP_PER_S, and admissions stay a few milliseconds apart.
+RATE_BURST = 10
+#: The sender paces itself at half the cap, with a small burst so a couple of
+#: control changes in the same instant still go out at once. A change past the
+#: burst waits for the next :meth:`NetpadSender.tick`, carrying the newest
+#: state, and press counters mean no press is lost to the wait.
+SEND_RATE_PER_S = RATE_CAP_PER_S // 2
+SEND_BURST = 5
 
 _HEADER = struct.Struct("<4sBB")
 _HELLO = struct.Struct("<16s")
@@ -318,7 +334,7 @@ class RecordingSink(Sink):
 
 class _Session:
     __slots__ = ("sid", "key", "addr", "client_nonce", "server_nonce", "created", "status", "last_seq",
-                 "last_tick", "last_progress", "counters", "window_start", "window_count", "closed_at",
+                 "last_tick", "last_progress", "counters", "tokens", "refill_at", "closed_at",
                  "close_reason")
 
     def __init__(self, sid: bytes, key: bytes, addr: Addr, client_nonce: bytes, server_nonce: bytes,
@@ -334,8 +350,8 @@ class _Session:
         self.last_tick = -1
         self.last_progress = now
         self.counters = bytes(BUTTONS)
-        self.window_start = now
-        self.window_count = 0
+        self.tokens = float(RATE_BURST)
+        self.refill_at = now
         self.closed_at = 0.0
         self.close_reason = 0
 
@@ -535,12 +551,12 @@ class ReceiverCore:
         if seq <= s.last_seq:
             self._bump("stale_seq")
             return []
-        if now - s.window_start >= 1.0:
-            s.window_start, s.window_count = now, 0
-        if s.window_count >= RATE_CAP_PER_S:
+        s.tokens = min(float(RATE_BURST), s.tokens + (now - s.refill_at) * (RATE_CAP_PER_S - RATE_BURST))
+        s.refill_at = now
+        if s.tokens < 1.0:
             self._bump("rate_dropped")
             return []
-        s.window_count += 1
+        s.tokens -= 1.0
         s.last_seq = seq
         state = PadState(lx, ly, rx, ry, lt, rt, buttons & 0x3FFF)
 
@@ -650,7 +666,8 @@ class NetpadSender:
     controls (at least every 50 ms; 60 Hz or faster is normal): that is the
     only place the loop tick advances, handshakes progress and keepalives go
     out, so the receiver's watchdog measures the loop, not a socket. Control
-    setters send at once while a session is live.
+    setters send at once while a session is live, within ``SEND_BURST`` and
+    ``SEND_RATE_PER_S``; a change past that goes out on the next tick.
 
     Parameters
     ----------
@@ -683,6 +700,9 @@ class NetpadSender:
         self._nonce: Optional[bytes] = None
         self._last_hello = float("-inf")
         self._last_send = float("-inf")
+        self._send_tokens = float(SEND_BURST)
+        self._send_refill_at = float("-inf")
+        self._pending = False
         self.stats: Dict[str, int] = {}
         #: When a list, every datagram sent is appended (tests replay them).
         self.capture: Optional[List[bytes]] = None
@@ -717,7 +737,21 @@ class NetpadSender:
             return
         self.state = state
         if self.status == "live":
-            self.send_state_now()
+            if self._may_send(self._clock()):
+                self.send_state_now()
+            else:
+                self._pending = True
+                self._bump("paced")
+
+    def _refill(self, now: float) -> None:
+        if self._send_refill_at != float("-inf"):
+            self._send_tokens = min(float(SEND_BURST),
+                                    self._send_tokens + (now - self._send_refill_at) * SEND_RATE_PER_S)
+        self._send_refill_at = now
+
+    def _may_send(self, now: float) -> bool:
+        self._refill(now)
+        return self._send_tokens >= 1.0
 
     # ---- lifecycle ----
     def start(self) -> None:
@@ -750,13 +784,17 @@ class NetpadSender:
         elif self.status == "refused" and now - self._last_hello >= REFUSED_RETRY_S:
             self._nonce = self._rng(NONCE_LEN)   # a late WELCOME for the refused attempt must not match
             self._hello(now)
-        elif self.status == "live" and now - self._last_send >= 1.0 / KEEPALIVE_HZ:
+        elif self.status == "live" and (now - self._last_send >= 1.0 / KEEPALIVE_HZ
+                                        or (self._pending and self._may_send(now))):
             self.send_state_now()
 
     def send_state_now(self) -> None:
         """Send the current state with the current loop tick (tests call this to imitate a stuck loop)."""
         if self.status != "live" or self._ks is None or self._sid is None:
             return
+        self._pending = False
+        self._refill(self._clock())
+        self._send_tokens = max(0.0, self._send_tokens - 1.0)
         self._seq += 1
         self._send(encode_state(self._ks, self._sid, self._seq, self.loop_tick, self.state, bytes(self.counters)))
 

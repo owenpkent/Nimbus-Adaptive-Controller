@@ -423,20 +423,65 @@ def test_resume_refuse_rate() -> None:
     check("a session whose opener arrives after another went live is refused", c.sender.status == "refused"
           and c.core.live is not None and c.core.live.addr == SENDER_B_ADDR)
 
-    # Rate cap: 500 accepted per session per second.
+    # Rate cap: at most 500 accepted per session in any second, spread evenly.
     r = Rig()
     r.connect()
     for _ in range(700):
         r.sender.loop_tick += 1
         r.sender.send_state_now()
     r.deliver()
-    accepted = r.core.live.window_count
-    check("the rate cap accepts at most 500 packets a second", accepted == P.RATE_CAP_PER_S
-          and r.core.stats.get("rate_dropped") == 700 - (P.RATE_CAP_PER_S - 2), f"accepted {accepted}, {r.core.stats}")
+    dropped = r.core.stats.get("rate_dropped", 0)
+    check("700 packets in one instant are cut to the burst", 700 - dropped <= P.RATE_BURST and dropped >= 700 - P.RATE_BURST,
+          f"accepted {700 - dropped}, {r.core.stats}")
     r.clock.advance(1.0)
     r.sender.set_button(3, True)
     r.deliver()
-    check("a new second accepts packets again", r.sink.state.pressed(3))
+    check("a moment later packets are accepted again", r.sink.state.pressed(3))
+
+    # The review's case: a sender over the cap for a whole second keeps its
+    # session. A calendar-second window dropped everything for the rest of the
+    # second once 500 were in, and the watchdog ended the session mid-drag.
+    f = Rig()
+    f.connect()
+    sid = f.core.live.sid
+    t0 = f.clock.t
+    accepted_at: List[float] = []                # one entry per admitted packet, time since t0
+    for step in range(3000):                     # 3 s in 1 ms steps, 700 packets a second
+        if step % 10 < 7:
+            f.sender.loop_tick += 1
+            f.sender.set_left_stick(((step % 200) - 100) / 100.0, 0.0)
+            f.sender.send_state_now()
+        rx, dropped = f.core.stats.get("rx", 0), f.core.stats.get("rate_dropped", 0)
+        f.deliver()
+        admitted = (f.core.stats.get("rx", 0) - rx) - (f.core.stats.get("rate_dropped", 0) - dropped)
+        accepted_at.extend([f.clock.t - t0] * admitted)
+        f.core.service()
+        f.clock.advance(0.001)
+    gaps = [b - a for a, b in zip(accepted_at, accepted_at[1:])]
+    busiest = max(sum(1 for t in accepted_at if w <= t < w + 1.0) for w in [x * 0.01 for x in range(201)])
+    check("a sender at 700 packets a second keeps its session", f.core.live is not None and f.core.live.sid == sid
+          and not f.core.stats.get("timeouts"), f"{f.core.stats}")
+    check("no one-second span admits more than the cap, and the cap is used", 450 <= busiest <= P.RATE_CAP_PER_S,
+          f"busiest second {busiest} of {len(accepted_at)} admitted in 3 s")
+    check("and admissions stay far inside the watchdog", gaps and max(gaps) < 0.02,
+          f"longest gap {max(gaps) * 1000:.0f} ms against {P.WATCHDOG_S * 1000:.0f}")
+
+    # The sender paces itself: a burst of changes goes out within its budget,
+    # and the newest state follows on the next tick.
+    s = Rig()
+    s.connect()
+    s.sender.sock.sent.clear()
+    for i in range(100):                          # 100 changes in 10 ms
+        s.sender.set_left_stick((i + 1) / 100.0, 0.0)
+        s.clock.advance(0.0001)
+    out = len(s.sender.sock.sent)
+    check("a burst of 100 changes in 10 ms sends only the sender's budget",
+          out <= P.SEND_BURST + int(P.SEND_RATE_PER_S * 0.010) + 1, f"{out} packets")
+    s.deliver()
+    s.clock.advance(0.005)
+    s.sender.tick()
+    s.deliver()
+    check("the newest state reaches the pad on the next tick", s.sink.state.lx == 32767, f"lx {s.sink.state.lx}")
 
     w = Rig()
     w.connect()
