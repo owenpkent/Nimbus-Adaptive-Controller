@@ -99,8 +99,8 @@ start it before the signed build is on the critical path.
 
 ```powershell
 driver\build.ps1                                          # Release x64
-driver\package.ps1 -SkipSign -DriverVersion 1.0.0.4       # dry run, no token needed
-driver\package.ps1 -DriverVersion 1.0.0.4 -Thumbprint <EV cert thumbprint>
+driver\package.ps1 -SkipSign -DriverVersion 1.0.0.5       # dry run, no token needed
+driver\package.ps1 -DriverVersion 1.0.0.5 -Thumbprint <EV cert thumbprint>
 ```
 
 `package.ps1` stages `inf` + `sys` + `pdb`, re-stamps `DriverVer`, regenerates
@@ -132,7 +132,7 @@ so this is not the release to find out.
 **DriverVer.** The build stamps the current date and time. Pass an explicit
 `-DriverVersion` for anything submitted: Windows picks the higher `DriverVer`
 when a package is replaced, so the number needs to be ours and monotonic. The
-convention to start with is `1.0.0.<interface version>`, currently `1.0.0.4`.
+convention to start with is `1.0.0.<interface version>`, currently `1.0.0.5`.
 
 ## 4. Submit
 

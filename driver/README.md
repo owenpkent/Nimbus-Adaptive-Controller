@@ -108,8 +108,8 @@ exactly the state anti-cheat refuses to start in. A build users can load needs a
 Microsoft signature through Partner Center attestation signing:
 
 ```powershell
-driver\package.ps1 -SkipSign -DriverVersion 1.0.0.4    # dry run, no token needed
-driver\package.ps1 -DriverVersion 1.0.0.4 -Thumbprint <EV cert thumbprint>
+driver\package.ps1 -SkipSign -DriverVersion 1.0.0.5    # dry run, no token needed
+driver\package.ps1 -DriverVersion 1.0.0.5 -Thumbprint <EV cert thumbprint>
 ```
 
 Registration prerequisites, the submission rules, how to verify the package that

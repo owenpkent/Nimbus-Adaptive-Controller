@@ -30,7 +30,7 @@
     Run build.ps1 first instead of packaging whatever is already built.
 
 .PARAMETER DriverVersion
-    Four-part version to stamp into DriverVer (for example 1.0.0.4). Omitted,
+    Four-part version to stamp into DriverVer (for example 1.0.0.5). Omitted,
     the build's own stamp is kept, which is the build date and time. A release
     should pass an explicit version: Windows picks the driver with the higher
     DriverVer when a package is replaced.

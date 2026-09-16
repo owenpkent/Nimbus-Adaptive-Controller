@@ -69,7 +69,7 @@ a replacement has to honor.
 5. **No kernel failsafe.** If Nimbus hangs with a stick deflected, ViGEmBus
    keeps reporting the last submitted report until the file handle closes. Our
    mouse filter solved exactly this class of problem with a heartbeat
-   (interface v4, 250 ms ticks). The pad has no equivalent, and a stuck stick
+   (interface v4's 250 ms ticks; v5 then made the watchdog count idle time alone, so queued requests cannot extend it). The pad has no equivalent, and a stuck stick
    in a game is the same category of accessibility failure as a stuck mouse.
 
 6. **The client library hides dead pads.** Found while building phase 0
@@ -378,7 +378,7 @@ In dependency order. Each item has a "done when" so it can be closed.
    length and ownership check, and the SDDL is a stated decision in
    `docs/PROTOCOL.md` rather than an accident.*
 7. **The kernel failsafe.** The one genuinely new capability, and the reason
-   this is more than a rename. Copy the mouse filter's interface v4 design: the
+   this is more than a rename. Copy the mouse filter's heartbeat design (interface v4, plus v5's rule that queued requests never extend the deadline): the
    client sends a heartbeat, and if it stops for N ticks the driver **centers
    the pad and releases every button by itself**, without waiting for the
    handle to close. A hung Nimbus can then never leave a stick pinned or a
