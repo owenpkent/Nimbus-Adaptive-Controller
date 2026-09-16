@@ -848,9 +848,17 @@ def check_read_flood() -> None:
            f"then {pend_close} parked and CloseHandle took {t_close * 1000:.1f} ms, completions {dict(errs_close)}; "
            f"{clean}, watchdog_releases {before['watchdog_releases']} -> {st['watchdog_releases'] if st else '?'}")
 
-    # the heartbeat's cost with N parked reads and a frozen client
+    # the heartbeat's cost with N parked reads and a frozen client. Before v5 the
+    # tick retired one parked read per period and the watchdog needed the queue
+    # empty first, so N parked reads cost N periods. Since v5 the watchdog runs on
+    # idle time alone: the release lands at 2.0 to 2.25 s whatever N is, and every
+    # read still parked fails with ERROR_NOT_READY.
     tick = iso.TICK_MS / 1000.0
-    name2 = f"B2b watchdog release with N parked reads and no re-issue (max(2 s, {tick:.2g} s + N x 250 ms) expected)"
+    idle_only = iso.INTERFACE_VERSION >= 5
+    if idle_only:
+        name2 = "B2b watchdog release with N parked reads and no re-issue (2.0 to 2.25 s whatever N, v5)"
+    else:
+        name2 = f"B2b watchdog release with N parked reads and no re-issue (max(2 s, {tick:.2g} s + N x 250 ms) expected)"
     rows: List[str] = []
     ok2 = True
     for count in (1, 8, 24):
@@ -860,7 +868,8 @@ def check_read_flood() -> None:
         t0 = time.perf_counter()
         t_release = None
         ticks = 0
-        deadline = t0 + 1.0 + count * 0.25 + 3.0
+        others: collections.Counter = collections.Counter()
+        deadline = t0 + (2.0 if idle_only else 1.0 + count * 0.25) + 3.0
         while time.perf_counter() < deadline:
             st = status_of(h)
             if st["isolating"] == 0:
@@ -871,17 +880,29 @@ def check_read_flood() -> None:
             err = rd.wait(0)
             if err == 0 and rd.returned.value == 0:
                 ticks += 1
+            else:
+                others[err] += 1   # 21 expected; 996 would be a read left parked after the release
             rd.close()
         _k32.CloseHandle(h)
-        # One tick per 250 ms period once idle > the tick length, and the release
-        # needs the queue empty and idle > 2 s: max(2.0, tick + N x 0.25) plus one period.
-        expected = max(2.0, tick + count * 0.25)
-        rows.append(f"N={count}: release {t_release:.2f} s, {ticks} ticks" if t_release is not None
-                    else f"N={count}: NOT released within {deadline - t0:.1f} s")
-        ok2 = ok2 and t_release is not None and expected - 0.1 <= t_release <= expected + 0.6
+        if idle_only:
+            # 2 s of idle sampled every 250 ms: 2.0 to 2.25 s, and nothing left parked.
+            expected = 2.0
+            settled = set(others) <= {ERROR_NOT_READY}
+        else:
+            # One tick per 250 ms period once idle > the tick length, and the release
+            # needs the queue empty and idle > 2 s: max(2.0, tick + N x 0.25) plus one period.
+            expected = max(2.0, tick + count * 0.25)
+            settled = True
+        rows.append(f"N={count}: release {t_release:.2f} s, {ticks} ticks, other completions {dict(others)}"
+                    if t_release is not None else f"N={count}: NOT released within {deadline - t0:.1f} s")
+        ok2 = ok2 and t_release is not None and expected - 0.1 <= t_release <= expected + 0.6 and settled
     st, clean = free_and_clean()
-    record(name2, ok2 and st is not None, "; ".join(rows) + f". Each parked read costs one 250 ms watchdog period "
-           f"before the release; Nimbus parks exactly one, so its bound stays 2.25 s. {clean}")
+    tail = ("Parked reads no longer postpone the watchdog (v5): the release lands at 2.0 to 2.25 s whatever N is "
+            "and fails every read still parked with 21."
+            if idle_only else
+            "Each parked read costs one 250 ms watchdog period before the release; Nimbus parks exactly one, "
+            "so its bound stays 2.25 s.")
+    record(name2, ok2 and st is not None, "; ".join(rows) + f". {tail} {clean}")
 
 
 def check_open_close_storm(seconds: float) -> None:

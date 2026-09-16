@@ -117,7 +117,19 @@ foreach ($m in $bad) {
 }
 
 $guard = Get-ScheduledTask -TaskName 'NimbusMouseFilterGuard' -ErrorAction SilentlyContinue
-Write-Host "Boot guard task          : $(if ($guard) { $guard.State } else { 'not registered' })"
+if ($guard) {
+    $guardText = $guard.State
+} else {
+    # The task runs as SYSTEM, so from a standard shell Get-ScheduledTask
+    # cannot read it and returns nothing, which is not the same as absent.
+    # schtasks tells the two apart: "Access is denied" means the task exists
+    # and this shell may not read it, "cannot find" means it is not there.
+    # cmd merges its stderr so PowerShell 5.1 does not wrap it in errors.
+    $probe = cmd /c 'schtasks /query /tn NimbusMouseFilterGuard 2>&1' | Out-String
+    if ($probe -match 'Access is denied') { $guardText = 'registered (run elevated to see its state)' }
+    else { $guardText = 'not registered' }
+}
+Write-Host "Boot guard task          : $guardText"
 
 $recent = Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Kernel-PnP'; Id=219} -MaxEvents 1 -ErrorAction SilentlyContinue
 if ($recent -and $recent.Message -match 'nimbus_moufilter') {

@@ -51,6 +51,19 @@ heartbeat tick went from 1 s to 250 ms, so a live client survives a stall of
 at least 1.5 s instead of 0.75 s, and the client pauses isolation while the
 secure desktop has the input (lock screen, UAC) and resumes after. v4 is
 built and installed and validated the same evening (17/17, 15/15 with the new desktop-pause check, 8/8, then the same three under Driver Verifier with no bugcheck). Details in the plan doc, section 5 items 7 and 11.
+**Interface v5** (2026-09-07) closed the open review comments: the watchdog
+releases on idle time alone (parked reads no longer postpone it), the service
+callback decides under the lock, a read already dequeued re-checks isolation
+before completing, and the client polls `Ctrl+Alt+F12` between reads and never
+closes the driver handle under a reader that is still running. v5 was built
+and passed Code Analysis and CodeQL clean on 2026-09-16 and was installed the
+same afternoon, the first filter on the machine since the 2026-09-07 recovery
+and the first run on the post-Hyper-V baseline: probe 17/17, relay harness
+8/8, battle test 15/15 (14/15 on the first pass, B2b having still encoded
+v4's per-parked-read cost; v5 released in 2.06 to 2.10 s whatever N was,
+which is the fix working, and the check now asserts that), then all three
+again under Driver Verifier (standard flags plus WDF verification) with no
+bugcheck and no pool allocation or IRQL raise by the driver's own code.
 Not attestation-signed, not validated against an anti-cheat game, not in any
 release. Do not ship it yet. The route to a signed build, and what it does and
 does not buy, is in [SIGNING.md](SIGNING.md).
@@ -95,8 +108,8 @@ exactly the state anti-cheat refuses to start in. A build users can load needs a
 Microsoft signature through Partner Center attestation signing:
 
 ```powershell
-driver\package.ps1 -SkipSign -DriverVersion 1.0.0.4    # dry run, no token needed
-driver\package.ps1 -DriverVersion 1.0.0.4 -Thumbprint <EV cert thumbprint>
+driver\package.ps1 -SkipSign -DriverVersion 1.0.0.5    # dry run, no token needed
+driver\package.ps1 -DriverVersion 1.0.0.5 -Thumbprint <EV cert thumbprint>
 ```
 
 Registration prerequisites, the submission rules, how to verify the package that
@@ -215,7 +228,10 @@ use it to accept the UAC prompt for the fix.
 1. **Before**: `driver\check-mouse-filter.ps1`, read-only and no elevation.
    Exits 0 when safe, 1 when the filter is registered but would not load, and
    2 when the mouse is already broken. Run it before a reboot, before turning
-   test signing off, and after Windows updates.
+   test signing off, and after Windows updates. Unelevated it can tell that
+   the guard task exists but not read its state: the task runs as SYSTEM and
+   `Get-ScheduledTask` returns nothing for it from a standard shell, so the
+   script asks `schtasks` and treats "Access is denied" as registered.
 2. **Instead of the sharp edge**: `driver\disable-testsigning.ps1` detaches the
    filter first and only then changes the boot setting, which is the same two
    steps in the only order that cannot strand you.
@@ -285,8 +301,10 @@ is what that script now does. Every guard above was written in response.
   (stress probe B5). The client's reader thread also runs at
   `THREAD_PRIORITY_TIME_CRITICAL`, which kept the mouse through a
   HIGH-priority CPU burn that starved a normal-priority reader past the
-  watchdog (B6). A client that parks N reads and freezes is released after
-  max(2 s, tick + N x 250 ms), one tick per watchdog period (B2b).
+  watchdog (B6). Before v5 a client that parked N reads and froze was released
+  after max(2 s, tick + N x 250 ms), one tick per watchdog period; since v5
+  the watchdog counts idle time alone, so the release lands at 2.0 to 2.25 s
+  whatever N is and the reads still parked fail with `ERROR_NOT_READY` (B2b).
 - While the secure desktop has the input (lock screen, UAC prompt,
   Ctrl+Alt+Del) the cursor relay cannot reach the cursor and the hotkey
   cannot be seen, so the client checks the input desktop every 100 ms and
