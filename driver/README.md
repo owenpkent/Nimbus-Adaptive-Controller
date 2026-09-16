@@ -61,8 +61,9 @@ same afternoon, the first filter on the machine since the 2026-09-07 recovery
 and the first run on the post-Hyper-V baseline: probe 17/17, relay harness
 8/8, battle test 15/15 (14/15 on the first pass, B2b having still encoded
 v4's per-parked-read cost; v5 released in 2.06 to 2.10 s whatever N was,
-which is the fix working, and the check now asserts that). Not yet under
-Driver Verifier.
+which is the fix working, and the check now asserts that), then all three
+again under Driver Verifier (standard flags plus WDF verification) with no
+bugcheck and no pool allocation or IRQL raise by the driver's own code.
 Not attestation-signed, not validated against an anti-cheat game, not in any
 release. Do not ship it yet. The route to a signed build, and what it does and
 does not buy, is in [SIGNING.md](SIGNING.md).
