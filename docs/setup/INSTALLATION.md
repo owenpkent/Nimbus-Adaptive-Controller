@@ -176,10 +176,13 @@ Proton (menu navigation, button-glyph switching from keyboard to Xbox icons).
 
 ### Known limitations on Linux
 
-- **Flight-sim / vJoy-preferring profiles have no output.** vJoy is a Windows
-  kernel driver with no Linux equivalent yet, so those profiles stay in
-  vJoy's permanent simulation mode. Use an Xbox/Adaptive/Custom profile
-  instead.
+- **Flight-sim / vJoy-preferring profiles are capped at 56 buttons.** vJoy
+  itself is a Windows kernel driver with no Linux equivalent, so
+  `VJoyInterface` stays in simulation mode, but the bridge substitutes
+  `UInputJoystickInterface` (8 axes over raw `uinput`, vJoy value range) and
+  these profiles do produce real output. Buttons 57 to 128 are unavailable:
+  evdev has only 56 generic joystick button codes against vJoy's 128. Not yet
+  verified against a real flight sim under Proton.
 - **Borderless Gaming and Game Focus Mode** are correctly disabled in the menu
   on non-Windows platforms (both check for Win32 at the API level).
 - **The "Game Mode" ribbon button** (Full Game Mode) is not yet hidden on

@@ -261,11 +261,14 @@ input through the actual on-screen joystick and button widgets.
    message at startup is expected, not an error.
 
 **Known limitations on Linux:**
-- **Flight-sim / vJoy-preferring profiles have no output.** vJoy is a Windows
-  kernel driver with no Linux equivalent here, so those profiles stay in
-  vJoy's permanent simulation mode. Use an Xbox/Adaptive/Custom profile
-  instead — a Linux-native vJoy replacement (an 8-axis, 56-button virtual
-  joystick via raw `uinput`) is planned separately.
+- **Flight-sim / vJoy-preferring profiles are capped at 56 buttons.** vJoy
+  itself is a Windows kernel driver with no Linux equivalent, so
+  `VJoyInterface` stays in simulation mode. The bridge substitutes
+  `UInputJoystickInterface` instead, an 8-axis virtual joystick via raw
+  `uinput` at the vJoy value range, so these profiles **do** produce real
+  output. The one gap is buttons 57 to 128: evdev has only 56 generic
+  joystick button codes against vJoy's 128. This path has not been verified
+  against a real flight sim under Proton the way the Xbox path has.
 - **Borderless Gaming and Game Focus Mode** are correctly disabled in the menu
   on non-Windows platforms — both depend on Win32 APIs with no Linux
   equivalent implemented yet.
