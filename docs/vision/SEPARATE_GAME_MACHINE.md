@@ -114,7 +114,7 @@ It has no window, so Game Mode's overlay limit does not apply.
 
 ### 3.3 Not pursued: a USB dongle
 
-Considered on 2026-09-14 and ruled out the same day: this track is software only. The idea was a Raspberry Pi Pico that enumerates as a wired Xbox 360 pad on the game machine (GP2040-CE's XInput mode already does that half and works on Steam Deck) and takes Nimbus's state over a USB to UART cable. It would have given about a millisecond of transport latency, no network service and reach to game machines with no receiver installed. It is recorded here so the question is not reopened by accident; reopening it is a decision for the project owner.
+Considered on 2026-09-14 and ruled out the same day: this track is software only. The idea was a Raspberry Pi Pico that enumerates as a wired Xbox 360 pad on the game machine (GP2040-CE's XInput mode already does that half and works on Steam Deck) and takes Nimbus's state over a USB to UART cable. It would have given about a millisecond of transport latency, no network service and reach to game machines with no receiver installed. It is recorded here so the question is not reopened by accident; reopening it is a decision for the project owner. **The decision stands.** [espp: What It Is, and What Nimbus Could Build With It](ESPP_EVALUATION.md) (2026-09-16) researches the parts without reopening it, and records two facts the Pico sketch did not have: an ESP32-S3 has WiFi, so no cable is needed, and `espp::UsbDevice` already implements the wired Xbox 360 device. It also finds the thing that would block shipping either version: the only USB identity a PC's XUSB driver binds is Microsoft's.
 
 ## 4. What changes in Nimbus
 
