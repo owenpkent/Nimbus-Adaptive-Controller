@@ -594,6 +594,26 @@ class ControllerBridge(QObject):
             print(f"No-focus flag failed: {e}")
             return False
     
+    def _remember_no_focus_mode(self, enabled: bool) -> None:
+        """Record a Game Focus Mode change the user asked for.
+
+        Two keys, because two things can change this flag. ``ui.no_focus_mode``
+        is the live state, which Full Game Mode sets on its own for the length
+        of a session. ``ui.no_focus_mode_user`` is the explicit choice from the
+        View menu, and it is the one :meth:`setWindow` restores at startup, so
+        that a session-only auto-enable never becomes permanent.
+
+        Only the live key was ever written, so the user key stayed absent and
+        the restore never fired: the setting survived in the config and was
+        never applied again, leaving the menu unchecked after every restart
+        while the config said it was on. Nothing reports that, and a window
+        that quietly takes focus again stops a game seeing its controller.
+        """
+        self._no_focus_mode = bool(enabled)
+        self._config.set("ui.no_focus_mode", self._no_focus_mode)
+        self._config.set("ui.no_focus_mode_user", self._no_focus_mode)
+        self._config.save_config()
+
     def _set_no_focus_mode(self, enabled: bool) -> None:
         if self._no_focus_mode == enabled:
             return
@@ -603,9 +623,7 @@ class ControllerBridge(QObject):
                 print("No-focus mode: window not set yet")
                 return
             if self._apply_no_focus_flag(enabled):
-                self._no_focus_mode = bool(enabled)
-                self._config.set("ui.no_focus_mode", self._no_focus_mode)
-                self._config.save_config()
+                self._remember_no_focus_mode(enabled)
                 self.noFocusModeChanged.emit(self._no_focus_mode)
                 print(f"No-focus mode {'ENABLED' if enabled else 'DISABLED'} (Qt WindowDoesNotAcceptFocus)")
             return
@@ -623,17 +641,13 @@ class ControllerBridge(QObject):
         if enabled:
             success = make_window_no_activate(hwnd)
             if success:
-                self._no_focus_mode = True
-                self._config.set("ui.no_focus_mode", True)
-                self._config.save_config()
+                self._remember_no_focus_mode(True)
                 self.noFocusModeChanged.emit(True)
                 print("No-focus mode ENABLED - window will not steal focus from games")
         else:
             success = remove_window_no_activate(hwnd)
             if success:
-                self._no_focus_mode = False
-                self._config.set("ui.no_focus_mode", False)
-                self._config.save_config()
+                self._remember_no_focus_mode(False)
                 self.noFocusModeChanged.emit(False)
                 print("No-focus mode DISABLED - normal window behavior restored")
     
