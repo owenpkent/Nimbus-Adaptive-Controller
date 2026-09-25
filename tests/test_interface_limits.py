@@ -81,24 +81,20 @@ class FakeVJoyDevice:
     """In-process stand-in for ``pyvjoy.VJoyDevice``.
 
     Records every ``set_axis`` / ``set_button`` call instead of touching a
-    driver. Real ``pyvjoy`` methods return the SDK call's bool success flag
-    and never raise on an out-of-range id (see the report); with
-    ``enforce_range=True`` this fake instead *raises* outside 1-128, purely
-    to exercise ``VJoyInterface``'s ``except Exception`` -> ``False`` path --
-    it does not claim that is how the real driver behaves.
+    driver. ``VJoyInterface.set_button`` now rejects an out-of-range
+    ``button_id`` itself (see ``src/vjoy_interface.py``), before this fake's
+    ``set_button`` is ever reached, so the fake no longer needs to simulate
+    the driver rejecting one.
     """
 
-    def __init__(self, enforce_range: bool = False) -> None:
+    def __init__(self) -> None:
         self.axis_calls: List[Tuple[int, int]] = []
         self.button_calls: List[Tuple[int, bool]] = []
-        self.enforce_range = enforce_range
 
     def set_axis(self, axis_id: int, value: int) -> None:
         self.axis_calls.append((axis_id, value))
 
     def set_button(self, button_id: int, state: bool) -> None:
-        if self.enforce_range and not (1 <= button_id <= 128):
-            raise ValueError(f"button id {button_id} out of range")
         self.button_calls.append((button_id, state))
 
 
@@ -159,10 +155,10 @@ def make_vigem() -> "vig.ViGEmInterface":
     return vig.ViGEmInterface(FakeConfig())
 
 
-def connected_vjoy(enforce_range: bool = False) -> "vj.VJoyInterface":
+def connected_vjoy() -> "vj.VJoyInterface":
     """Build a ``VJoyInterface`` and inject a ``FakeVJoyDevice`` as if connected."""
     iface = make_vjoy()
-    iface.device = FakeVJoyDevice(enforce_range=enforce_range)
+    iface.device = FakeVJoyDevice()
     iface.is_connected = True
     return iface
 
@@ -217,6 +213,20 @@ def test_vjoy_update_axis() -> None:
 
     check("update_axis return type is bool", type(iface.update_axis("x", 0.0)) is bool)
 
+    clamp_iface = connected_vjoy()
+    ok_pos = clamp_iface.update_axis("x", 5.0)
+    check("update_axis('x', 5.0) clamps to 1.0 and still succeeds", ok_pos is True)
+    check("current_values['x'] reflects the clamped value: (1.0+1.0)/2 == 1.0",
+          clamp_iface.current_values["x"] == 1.0, f"{clamp_iface.current_values['x']}")
+    check("the clamped value (not 5.0) is what reached get_vjoy_value/set_axis",
+          clamp_iface.device.axis_calls[-1][1] == clamp_iface.config.get_vjoy_value(1.0),
+          f"{clamp_iface.device.axis_calls[-1]}")
+
+    ok_neg = clamp_iface.update_axis("y", -5.0)
+    check("update_axis('y', -5.0) clamps to -1.0 and still succeeds", ok_neg is True)
+    check("current_values['y'] reflects the clamped value: (-1.0+1.0)/2 == 0.0",
+          clamp_iface.current_values["y"] == 0.0, f"{clamp_iface.current_values['y']}")
+
     disconnected = make_vjoy()
     check("update_axis on a disconnected (simulation-mode) interface returns False",
           disconnected.update_axis("x", 0.0) is False)
@@ -236,23 +246,30 @@ def test_vjoy_update_axis_ignores_failsafe() -> None:
 
 
 def test_vjoy_set_button() -> None:
-    permissive = connected_vjoy(enforce_range=False)
-    for button_id in (0, 1, 64, 128, 129):
-        ok = permissive.set_button(button_id, True)
-        check(f"set_button({button_id}) against a permissive device returns True "
-              "(VJoyInterface performs no button-id range check of its own; see report)",
-              ok is True)
-
-    strict = connected_vjoy(enforce_range=True)
+    iface = connected_vjoy()
     for button_id in (1, 64, 128):
-        check(f"set_button({button_id}) succeeds against a range-enforcing fake device",
-              strict.set_button(button_id, True) is True)
-    for button_id in (0, 129):
-        check(f"set_button({button_id}) is turned into False once the device layer "
-              "rejects it (exercises the except-Exception path)",
-              strict.set_button(button_id, True) is False)
+        ok = iface.set_button(button_id, True)
+        check(f"set_button({button_id}) is accepted", ok is True)
+        check(f"set_button({button_id}) reaches the (fake) device",
+              (button_id, True) in iface.device.button_calls)
 
-    check("set_button return type is bool", type(strict.set_button(1, False)) is bool)
+    for button_id in (0, 129):
+        ok = iface.set_button(button_id, True)
+        check(f"set_button({button_id}) is rejected before touching the device "
+              "(outside 1-128, returns False)", ok is False)
+        check(f"set_button({button_id}) never reaches the (fake) device",
+              all(call[0] != button_id for call in iface.device.button_calls))
+        check(f"set_button({button_id}) is recorded in _warned_buttons (warn once per id)",
+              button_id in iface._warned_buttons)
+
+    warned_count_before = len(iface._warned_buttons)
+    ok_again = iface.set_button(0, True)
+    check("a repeat call with an already-warned out-of-range id still returns False",
+          ok_again is False)
+    check("a repeat out-of-range id does not grow _warned_buttons again",
+          len(iface._warned_buttons) == warned_count_before)
+
+    check("set_button return type is bool", type(iface.set_button(1, False)) is bool)
 
     disconnected = make_vjoy()
     check("set_button on a disconnected (simulation-mode) interface returns False",
@@ -357,9 +374,23 @@ def test_vigem_update_axis_mapping() -> None:
     check("'rz' at -1.0 gives right_trigger 0.0", iface.current_values["right_trigger"] == 0.0)
 
     ok = iface.update_axis("x", 5.0)
-    check("update_axis does NOT clamp out-of-range input, unlike set_left_stick/"
-          "set_*_trigger (asymmetry; see report)",
-          ok is True and iface.current_values["left_x"] == 5.0)
+    check("update_axis clamps out-of-range input to 1.0, matching set_left_stick/"
+          "set_*_trigger",
+          ok is True and iface.current_values["left_x"] == 1.0,
+          f"{iface.current_values['left_x']}")
+    check("the clamped value (not 5.0) is what reached the (fake) gamepad",
+          iface.gamepad.left_stick[0] == 1.0, f"{iface.gamepad.left_stick}")
+
+    ok_neg = iface.update_axis("ry", -5.0)
+    check("update_axis clamps a large negative value to -1.0",
+          ok_neg is True and iface.current_values["right_y"] == -1.0,
+          f"{iface.current_values['right_y']}")
+
+    iface.update_axis("z", 5.0)
+    check("clamping happens before the trigger's (value+1)/2 conversion, so "
+          "z=5.0 still gives left_trigger 1.0 (not >1.0)",
+          iface.current_values["left_trigger"] == 1.0,
+          f"{iface.current_values['left_trigger']}")
 
     check("update_axis return type is bool", type(iface.update_axis("x", 0.0)) is bool)
 

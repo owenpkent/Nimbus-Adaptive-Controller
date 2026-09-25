@@ -14,13 +14,27 @@ Run::
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
+import src.updater as updater_module  # noqa: E402
 from src.updater import is_below_minimum, is_newer, parse_version  # noqa: E402
+
+
+class _CaptureHandler(logging.Handler):
+    """Collects log records instead of printing them, so a check can inspect
+    what (if anything) ``src.updater``'s logger emitted."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
 
 FAILS = 0
 PASSES = 0
@@ -111,6 +125,43 @@ def main() -> int:
           is_below_minimum("not-a-version", "1.4.0") is False)
     check("an invalid minimum version returns False rather than raising",
           is_below_minimum("1.4.0", "not-a-version") is False)
+
+    print("\nunparseable-version logging (our own broken version string is logged; "
+          "untrusted manifest data is not)")
+
+    handler = _CaptureHandler()
+    original_level = updater_module.logger.level
+    updater_module.logger.addHandler(handler)
+    updater_module.logger.setLevel(logging.WARNING)
+    try:
+        handler.records.clear()
+        check("is_newer with an invalid local version still returns False",
+              is_newer("1.5.0", "not-a-version") is False)
+        check("...and logs a warning naming the bad local version",
+              any(r.levelno == logging.WARNING and "not-a-version" in r.getMessage()
+                  for r in handler.records))
+
+        handler.records.clear()
+        check("is_newer with an invalid remote (valid local) still returns False",
+              is_newer("not-a-version", "1.5.0") is False)
+        check("...and does NOT log a warning (remote is untrusted manifest data)",
+              len(handler.records) == 0)
+
+        handler.records.clear()
+        check("is_below_minimum with an invalid current version still returns False",
+              is_below_minimum("not-a-version", "1.4.0") is False)
+        check("...and logs a warning naming the bad current version",
+              any(r.levelno == logging.WARNING and "not-a-version" in r.getMessage()
+                  for r in handler.records))
+
+        handler.records.clear()
+        check("is_below_minimum with an invalid minimum (valid current) still returns False",
+              is_below_minimum("1.4.0", "not-a-version") is False)
+        check("...and does NOT log a warning (minimum is untrusted manifest data)",
+              len(handler.records) == 0)
+    finally:
+        updater_module.logger.removeHandler(handler)
+        updater_module.logger.setLevel(original_level)
 
     print(f"\n{PASSES}/{PASSES + FAILS} checks passed")
     return 1 if FAILS else 0

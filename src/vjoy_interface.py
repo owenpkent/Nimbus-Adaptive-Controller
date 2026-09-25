@@ -73,6 +73,9 @@ class VJoyInterface:
             'sl0': 0.5,
             'sl1': 0.5
         }
+
+        # Button IDs already warned about, so a bad mapping cannot spam the log
+        self._warned_buttons: set = set()
         
         # Failsafe system (disabled per user preference)
         self.failsafe_enabled = False
@@ -291,7 +294,11 @@ class VJoyInterface:
         self.last_command_time = current_time
         
         # Ignore failsafe gating
-        
+
+        # Clamp like the uinput backend, so get_vjoy_value never produces an
+        # out-of-range device value
+        value = max(-1.0, min(1.0, value))
+
         try:
             # Convert normalized value to VJoy range
             vjoy_value = self.config.get_vjoy_value(value)
@@ -396,7 +403,15 @@ class VJoyInterface:
         """
         if not self.is_connected or not self.device:
             return False
-        
+
+        # pyvjoy forwards out-of-range IDs to the DLL, which reports failure
+        # through a return value this wrapper never sees, so reject them here
+        if not 1 <= button_id <= 128:
+            if button_id not in self._warned_buttons:
+                self._warned_buttons.add(button_id)
+                print(f"Unknown button ID: {button_id} (vJoy supports 1-128)")
+            return False
+
         try:
             self.device.set_button(button_id, pressed)
             self.last_command_time = time.time()

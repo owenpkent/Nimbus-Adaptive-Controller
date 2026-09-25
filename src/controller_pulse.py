@@ -95,19 +95,25 @@ def _send_burst(iface: Any, count: int = 10, delay: float = 0.016) -> None:
     The deflections are transient, so the burst never overwrites the commanded
     stick position. A release that lands mid-burst is therefore what gets
     re-emitted at the end, instead of being undone.
+
+    While a pulse is running, every write re-reads ``active_interface()``, so
+    a ``rebind_interface`` during the burst takes effect immediately instead
+    of the burst finishing against an interface being torn down.
     """
     try:
         for i in range(count):
+            live = active_interface() or iface
             val = BURST_AMPLITUDE * (1.0 if i % 2 == 0 else -1.0)
-            _transient(iface, val, 0.0)
+            _transient(live, val, 0.0)
             time.sleep(delay)
+        live = active_interface() or iface
         try:
-            iface.set_button(BUTTON_A, True)
+            live.set_button(BUTTON_A, True)
             time.sleep(0.05)
-            iface.set_button(BUTTON_A, False)
+            live.set_button(BUTTON_A, False)
         except Exception:
             pass
-        _restore(iface)
+        _restore(active_interface() or iface)
         with _stats_lock:
             _stats["controller_bursts_sent"] += 1
         print(f"[controller_pulse] Sent {count}-pulse controller burst (amplitude={BURST_AMPLITUDE} + A press)")

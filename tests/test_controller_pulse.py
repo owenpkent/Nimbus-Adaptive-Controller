@@ -249,6 +249,40 @@ def test_pulses_land_on_new_interface_after_rebind() -> None:
         _ensure_stopped()
 
 
+def test_rebind_during_startup_burst_redirects_burst() -> None:
+    print("\na rebind_interface() during the startup burst redirects the rest of the burst")
+    try:
+        fake_a = FakeInterface()
+        fake_b = FakeInterface()
+        controller_pulse.start_controller_mode(fake_a, pulse_hz=60)
+        # The burst is 10 deflections * 16ms + a 50ms A-hold (~210ms total).
+        # Rebind partway through, so some of the burst has already landed on
+        # fake_a before the switch.
+        time.sleep(0.05)
+        check("rebind mid-burst succeeds",
+              controller_pulse.rebind_interface(fake_b) is True)
+
+        # Let the rest of the burst (A press/release, restore) and at least
+        # one keep-alive tick land before stopping.
+        time.sleep(0.3)
+        controller_pulse.stop_controller_mode()
+
+        burst_writes_on_b = [
+            (x, y) for x, y in fake_b.transients()
+            if abs(abs(x) - controller_pulse.BURST_AMPLITUDE) < 1e-9 and y == 0.0
+        ]
+        check("fake_b received burst-amplitude (0.5) transient deflections after the rebind",
+              len(burst_writes_on_b) > 0)
+        check("fake_b received the burst's A press",
+              (controller_pulse.BUTTON_A, True) in fake_b.button_events)
+        check("fake_b received the burst's A release",
+              (controller_pulse.BUTTON_A, False) in fake_b.button_events)
+        check("the restore after the rebind landed on fake_b, not fake_a",
+              fake_b.last_transient() is not None)
+    finally:
+        _ensure_stopped()
+
+
 def test_send_controller_burst_pattern_and_restore() -> None:
     print("\nsend_controller_burst: alternating amplitude, A press, and the restore contract")
     try:
@@ -332,6 +366,7 @@ def main() -> int:
     test_start_while_already_active_is_a_noop()
     test_rebind_interface_guards()
     test_pulses_land_on_new_interface_after_rebind()
+    test_rebind_during_startup_burst_redirects_burst()
     test_send_controller_burst_pattern_and_restore()
     test_send_controller_burst_defaults_to_the_active_interface()
     test_get_controller_mode_stats()
