@@ -126,17 +126,37 @@ def parse_version(version_str: str) -> Tuple[int, int, int, int, int]:
 
 
 def is_newer(remote: str, local: str) -> bool:
-    """Return True if *remote* is a newer version than *local*."""
+    """Return True if *remote* is a newer version than *local*.
+
+    An unparseable *remote* (untrusted manifest data) is simply not newer.
+    An unparseable *local* is our own broken version string, so it is logged
+    rather than silently disabling every future update check.
+    """
     try:
-        return parse_version(remote) > parse_version(local)
+        local_parsed = parse_version(local)
+    except ValueError:
+        logger.warning("Local version %r is unparseable; update checks are disabled.", local)
+        return False
+    try:
+        return parse_version(remote) > local_parsed
     except ValueError:
         return False
 
 
 def is_below_minimum(current: str, minimum: str) -> bool:
-    """Return True if *current* is below the minimum supported version."""
+    """Return True if *current* is below the minimum supported version.
+
+    An unparseable *minimum* (untrusted manifest data) imposes no minimum.
+    An unparseable *current* is our own broken version string, so it is
+    logged rather than silently skipping the check.
+    """
     try:
-        return parse_version(current) < parse_version(minimum)
+        current_parsed = parse_version(current)
+    except ValueError:
+        logger.warning("Current version %r is unparseable; minimum-version check skipped.", current)
+        return False
+    try:
+        return current_parsed < parse_version(minimum)
     except ValueError:
         return False
 

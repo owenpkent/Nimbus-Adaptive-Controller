@@ -326,6 +326,10 @@ class ViGEmInterface:
         if not self.is_connected or not self.gamepad:
             return False
 
+        # Clamp like the set_* methods, so both call paths into the same
+        # stick state honor the hardware range
+        value = max(-1.0, min(1.0, value))
+
         try:
             # Map vJoy axis names to Xbox controller
             if axis == 'x':
