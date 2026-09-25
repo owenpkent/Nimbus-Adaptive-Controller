@@ -318,28 +318,28 @@ Dialog {
                                 Row {
                                     spacing: 12
                                     Label { text: "X:"; color: "#aaa"; font.pixelSize: 12; width: 14; anchors.verticalCenter: parent.verticalCenter }
-                                    TextField {
+                                    Basic.TextField {
                                         id: winX; width: 70; text: "0"
                                         color: "white"; font.pixelSize: 12
                                         validator: IntValidator { bottom: -9999; top: 99999 }
                                         background: Rectangle { color: "#1e1e1e"; border.color: winX.activeFocus ? "#4a9eff" : "#555"; border.width: 1; radius: 3 }
                                     }
                                     Label { text: "Y:"; color: "#aaa"; font.pixelSize: 12; width: 14; anchors.verticalCenter: parent.verticalCenter }
-                                    TextField {
+                                    Basic.TextField {
                                         id: winY; width: 70; text: "0"
                                         color: "white"; font.pixelSize: 12
                                         validator: IntValidator { bottom: -9999; top: 99999 }
                                         background: Rectangle { color: "#1e1e1e"; border.color: winY.activeFocus ? "#4a9eff" : "#555"; border.width: 1; radius: 3 }
                                     }
                                     Label { text: "W:"; color: "#aaa"; font.pixelSize: 12; width: 18; anchors.verticalCenter: parent.verticalCenter }
-                                    TextField {
+                                    Basic.TextField {
                                         id: winW; width: 70; text: "1280"
                                         color: "white"; font.pixelSize: 12
                                         validator: IntValidator { bottom: 100; top: 99999 }
                                         background: Rectangle { color: "#1e1e1e"; border.color: winW.activeFocus ? "#4a9eff" : "#555"; border.width: 1; radius: 3 }
                                     }
                                     Label { text: "H:"; color: "#aaa"; font.pixelSize: 12; width: 14; anchors.verticalCenter: parent.verticalCenter }
-                                    TextField {
+                                    Basic.TextField {
                                         id: winH; width: 70; text: "720"
                                         color: "white"; font.pixelSize: 12
                                         validator: IntValidator { bottom: 100; top: 99999 }

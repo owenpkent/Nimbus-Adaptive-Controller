@@ -140,6 +140,10 @@ def main() -> int:
         engine.load(QUrl.fromLocalFile(str(main_qml)))
         if not engine.rootObjects():
             return 1   # the finally below closes the splash
+        # Close before exec(): the finally only runs once the event loop ends,
+        # and the splash is always-on-top, so it would cover the window all session.
+        if splash:
+            splash.close()
         vjoy_ok = bridge._vjoy.is_connected if bridge._vjoy else False
         vigem_ok = bridge._vigem.is_connected if bridge._vigem else False
         services.telemetry.track_session_start(__version__, bridge.getOutputMode(), vjoy_ok, vigem_ok)
